@@ -55,7 +55,7 @@ krypto-chat/
 
 ## Data model
 - `profiles(id → auth.users.id, username UNIQUE, display_name, created_at)`
-- `conversations(id, direct_key UNIQUE, created_at, last_seq)`: `direct_key` is the two member IDs, sorted and joined, so a 1:1 conversation can't be created twice
+- `conversations(id, direct_key UNIQUE, created_at, last_seq, last_message_at)`: `direct_key` is the two member IDs, sorted and joined, so a 1:1 conversation can't be created twice
 - `conversation_members(conversation_id, user_id, delivered_up_to_seq, read_up_to_seq)`
 - `messages(id, conversation_id, seq, sender_id, client_msg_id, content_type, body, created_at)`: unique on `(conversation_id, seq)` and on `(sender_id, client_msg_id)`, which dedupes retries per sender
 
@@ -82,20 +82,24 @@ Every request except `/health` sends `Authorization: Bearer <supabase JWT>`. Sig
 - `POST /profiles {username, display_name}`: create the caller's profile after sign-up. `username` must match `^[a-z0-9_]{3,30}$`. Returns 409 `username_taken` or `profile_exists`
 - `GET /users?q=`: search profiles by username prefix (case-insensitive, excludes the caller, max 20)
 - `POST /conversations {peer_id}`: creates the 1:1 conversation (201) or returns the existing one (200). Errors: 400 `cannot_message_self`, 403 `profile_required`, 404 `user_not_found`
-- `GET /conversations`: the caller's conversations, newest first, each as `{id, last_seq, created_at, peer: {id, username, display_name}}`
+- `GET /conversations`: the caller's conversations, most recently active first, each as `{id, last_seq, created_at, peer: {id, username, display_name}}`
+- `GET /conversations/:id/messages?before_seq=&limit=50`: message history in ascending `seq` order (the latest page by default; `before_seq` pages backwards). 404 `conversation_not_found` if the caller isn't a member
 - `GET /sync?cursors=...`
 
 ### WebSocket events
-The server checks the JWT during the handshake and closes the socket if the token is invalid or expired.
+Browsers can't set headers on a WebSocket, and a token in the URL would end up in logs, so the client authenticates with its first message: `auth {token}`. The server replies `ready {user_id}`, or closes the socket with code `4401` if the token is invalid or doesn't arrive within 5s. Every event is a JSON object with a `type` field. The server handles each socket's events one at a time, in order, and pings every 30s to drop dead connections.
 - Client → server:
+  - `auth {token}`
   - `message.send {client_msg_id, conversation_id, content_type, body}`
   - `receipt.delivered {conversation_id, seq}`
   - `receipt.read {conversation_id, seq}`
 - Server → client:
-  - `message.ack {client_msg_id, seq, created_at}`
-  - `message.new {conversation_id, seq, sender_id, client_msg_id, content_type, body, created_at}`
+  - `ready {user_id}`
+  - `message.ack {client_msg_id, conversation_id, seq, created_at}`: sent to the socket that sent the message, including for retries of a message that's already stored
+  - `message.new {message}`: sent to every member's other sockets. Not re-sent for a retry of an already stored message
+  - `conversation.new {conversation}`: sent to the peer when a conversation is created
   - `receipt.update {conversation_id, user_id, delivered_up_to, read_up_to}`
-  - `error {client_msg_id?, reason}`
+  - `error {client_msg_id?, reason}`: reasons are `invalid_message`, `not_a_member`, `duplicate_client_msg_id` (the same ID was used in another conversation), `internal_error`, `invalid_json`, `unknown_event`
 
 ## Build order
 1. `api-server` skeleton + migrations; `web-client` skeleton; Supabase dev project

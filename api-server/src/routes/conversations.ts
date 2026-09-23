@@ -1,41 +1,12 @@
 import type { FastifyInstance } from "fastify";
+import { getConversationForUser, listConversations } from "../conversations/service.js";
 import { pool, withTransaction } from "../db.js";
-
-type ConversationRow = {
-  id: string;
-  last_seq: string; // bigint comes back as a string
-  created_at: Date;
-  peer_id: string;
-  peer_username: string;
-  peer_display_name: string;
-};
-
-// Conversations as seen by one member: the other member is the "peer".
-const selectConversations = `
-  select c.id, c.last_seq, c.created_at,
-         p.id as peer_id, p.username as peer_username, p.display_name as peer_display_name
-  from conversation_members me
-  join conversations c on c.id = me.conversation_id
-  join conversation_members other on other.conversation_id = c.id and other.user_id <> me.user_id
-  join profiles p on p.id = other.user_id
-  where me.user_id = $1`;
-
-function toConversation(row: ConversationRow) {
-  return {
-    id: row.id,
-    last_seq: Number(row.last_seq),
-    created_at: row.created_at,
-    peer: { id: row.peer_id, username: row.peer_username, display_name: row.peer_display_name },
-  };
-}
+import { listMessages } from "../messages/service.js";
+import { notifyUser } from "../realtime/index.js";
 
 export async function conversationRoutes(app: FastifyInstance) {
   app.get("/conversations", async (request) => {
-    const { rows } = await pool.query<ConversationRow>(
-      `${selectConversations} order by c.created_at desc`,
-      [request.userId],
-    );
-    return { conversations: rows.map(toConversation) };
+    return { conversations: await listConversations(request.userId) };
   });
 
   // Returns the existing 1:1 conversation with peer_id, or creates it.
@@ -89,11 +60,41 @@ export async function conversationRoutes(app: FastifyInstance) {
         return { id: existing.rows[0]!.id, created: false };
       });
 
-      const { rows } = await pool.query<ConversationRow>(`${selectConversations} and c.id = $2`, [
-        me,
-        id,
-      ]);
-      return reply.code(created ? 201 : 200).send(toConversation(rows[0]!));
+      if (created) {
+        // Let the peer's open clients show the new conversation right away.
+        const peerView = await getConversationForUser(peer, id);
+        if (peerView) notifyUser(peer, { type: "conversation.new", conversation: peerView });
+      }
+
+      const conversation = await getConversationForUser(me, id);
+      return reply.code(created ? 201 : 200).send(conversation);
+    },
+  );
+
+  // Message history, oldest first. Pass before_seq to page backwards.
+  app.get<{ Params: { id: string }; Querystring: { before_seq?: number; limit?: number } }>(
+    "/conversations/:id/messages",
+    {
+      schema: {
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string", format: "uuid" } },
+        },
+        querystring: {
+          type: "object",
+          properties: {
+            before_seq: { type: "integer", minimum: 1 },
+            limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { before_seq, limit = 50 } = request.query;
+      const messages = await listMessages(request.userId, request.params.id, before_seq, limit);
+      if (!messages) return reply.code(404).send({ error: "conversation_not_found" });
+      return { messages };
     },
   );
 }
