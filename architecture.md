@@ -40,7 +40,7 @@ krypto-chat/
 - Fastify, with `@fastify/websocket` for real-time traffic. The DB is accessed with plain `pg` and raw SQL, and the schema is managed with numbered `.sql` migrations and a small runner script.
 - One Node/TypeScript process that serves both the REST API and the WebSocket endpoint. Sending a message is a single in-process flow: write to the DB → ack the sender → push to the recipient. That way no message bus is needed between separate services.
 - The WebSocket code lives in its own module (`src/realtime/`), and the rest of the app reaches it only through `notifyUser(userId, event)`. It keeps an in-memory map of userId → sockets. Once we run more than one instance, we add Redis pub/sub behind `notifyUser` (and extract the module into its own service if that's still worth it).
-- It checks the Supabase JWT (JWKS or the project secret) on every REST request and on the WebSocket handshake, and takes the user ID from `sub`. It never handles passwords.
+- It checks the Supabase JWT against the project's JWKS (asymmetric signing keys; issuer `<SUPABASE_URL>/auth/v1`, audience `authenticated`) on every REST request and on the WebSocket handshake, and takes the user ID from `sub`. It never handles passwords.
 
 ### Supabase
 - **Auth** handles sign-up, sign-in, password hashing, sessions and token refresh. To switch providers later, only JWT verification and the sign-in UI need to change.
@@ -77,9 +77,10 @@ krypto-chat/
 
 ## API (draft)
 ### REST
-Every request sends `Authorization: Bearer <supabase JWT>`. Sign-up and sign-in go straight to Supabase Auth.
-- `POST /profiles {username, display_name}`: create the caller's profile after sign-up
-- `GET /users?q=`: search profiles by username prefix
+Every request except `/health` sends `Authorization: Bearer <supabase JWT>`. Sign-up and sign-in go straight to Supabase Auth. JSON fields are snake_case, and errors look like `{ "error": "<code>" }`.
+- `GET /me`: the caller's profile, or 404 `profile_not_found` (the client then shows profile setup)
+- `POST /profiles {username, display_name}`: create the caller's profile after sign-up. `username` must match `^[a-z0-9_]{3,30}$`. Returns 409 `username_taken` or `profile_exists`
+- `GET /users?q=`: search profiles by username prefix (case-insensitive, excludes the caller, max 20)
 - `POST /conversations {peer_id}`: returns the existing 1:1 conversation if there is one
 - `GET /conversations`
 - `GET /sync?cursors=...`

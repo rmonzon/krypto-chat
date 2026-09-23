@@ -16,13 +16,14 @@ Requires Node 22+ and pnpm, plus a Supabase project.
 ```sh
 # API server
 cd api-server
-cp .env.example .env   # fill in DATABASE_URL (Supabase session pooler URL)
+cp .env.example .env   # fill in DATABASE_URL (session pooler URL) and SUPABASE_URL
 pnpm install
 pnpm migrate
 pnpm dev               # http://localhost:3000
 
 # Web client (in another terminal)
 cd web-client
+cp .env.example .env   # fill in VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY
 pnpm install
 pnpm dev               # http://localhost:5173, proxies /api and /ws to the API server
 ```
