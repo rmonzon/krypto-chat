@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import type { Profile } from '../lib/types'
 
-export function UserSearch() {
+export function UserSearch({ onSelect }: { onSelect: (user: Profile) => void }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Profile[]>([])
   const [error, setError] = useState(false)
@@ -46,7 +46,16 @@ export function UserSearch() {
       <ul className="results">
         {visible.map((user) => (
           <li key={user.id}>
-            <strong>{user.display_name}</strong> <span className="muted">@{user.username}</span>
+            <button
+              type="button"
+              className="item"
+              onClick={() => {
+                onSelect(user)
+                setQuery('')
+              }}
+            >
+              <strong>{user.display_name}</strong> <span className="muted">@{user.username}</span>
+            </button>
           </li>
         ))}
       </ul>

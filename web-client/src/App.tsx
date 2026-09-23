@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { AuthScreen } from './auth/AuthScreen'
+import { ChatHome } from './conversations/ChatHome'
 import { api, ApiError } from './lib/api'
 import { supabase } from './lib/supabase'
 import type { Profile } from './lib/types'
 import { ProfileSetup } from './profile/ProfileSetup'
-import { UserSearch } from './users/UserSearch'
 
 export default function App() {
   // undefined = still restoring the session from storage
@@ -41,17 +41,5 @@ function SignedIn() {
   if (profile === undefined) return null
   if (profile === null) return <ProfileSetup onCreated={setProfile} />
 
-  return (
-    <main className="card">
-      <header className="row">
-        <span>
-          <strong>{profile.display_name}</strong> <span className="muted">@{profile.username}</span>
-        </span>
-        <button type="button" className="link" onClick={() => supabase.auth.signOut()}>
-          Sign out
-        </button>
-      </header>
-      <UserSearch />
-    </main>
-  )
+  return <ChatHome profile={profile} />
 }

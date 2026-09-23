@@ -63,3 +63,51 @@ button.link {
 .notice {
   color: #2a7;
 }
+
+.chat {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  gap: 24px;
+  max-width: 960px;
+  margin: 32px auto;
+  padding: 0 16px;
+}
+
+@media (max-width: 640px) {
+  .chat {
+    grid-template-columns: 1fr;
+  }
+}
+
+h2 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+  margin: 16px 0 0;
+}
+
+button.item {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: inherit;
+}
+
+button.item:hover,
+button.item.selected {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.results li {
+  border-bottom: none;
+  padding: 0;
+}
+
+.conversation header {
+  padding-bottom: 12px;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+}

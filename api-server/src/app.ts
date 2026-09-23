@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import { requireAuth } from "./auth.js";
 import { pool } from "./db.js";
 import { registerRealtime } from "./realtime/index.js";
+import { conversationRoutes } from "./routes/conversations.js";
 import { profileRoutes } from "./routes/profiles.js";
 import { userRoutes } from "./routes/users.js";
 
@@ -25,6 +26,7 @@ export async function buildApp() {
     authed.addHook("onRequest", requireAuth);
     await authed.register(profileRoutes);
     await authed.register(userRoutes);
+    await authed.register(conversationRoutes);
   });
 
   await registerRealtime(app);

@@ -81,8 +81,8 @@ Every request except `/health` sends `Authorization: Bearer <supabase JWT>`. Sig
 - `GET /me`: the caller's profile, or 404 `profile_not_found` (the client then shows profile setup)
 - `POST /profiles {username, display_name}`: create the caller's profile after sign-up. `username` must match `^[a-z0-9_]{3,30}$`. Returns 409 `username_taken` or `profile_exists`
 - `GET /users?q=`: search profiles by username prefix (case-insensitive, excludes the caller, max 20)
-- `POST /conversations {peer_id}`: returns the existing 1:1 conversation if there is one
-- `GET /conversations`
+- `POST /conversations {peer_id}`: creates the 1:1 conversation (201) or returns the existing one (200). Errors: 400 `cannot_message_self`, 403 `profile_required`, 404 `user_not_found`
+- `GET /conversations`: the caller's conversations, newest first, each as `{id, last_seq, created_at, peer: {id, username, display_name}}`
 - `GET /sync?cursors=...`
 
 ### WebSocket events
