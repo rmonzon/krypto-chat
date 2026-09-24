@@ -143,6 +143,8 @@ button.item.selected {
 .messages {
   flex: 1;
   overflow-y: auto;
+  /* Prepending history restores the position manually; browser anchoring would double-adjust. */
+  overflow-anchor: none;
   list-style: none;
   margin: 0;
   padding: 12px 0;
@@ -196,4 +198,14 @@ button.status.failed {
 
 .composer input {
   flex: 1;
+}
+
+.history-edge {
+  min-height: 1px;
+  text-align: center;
+  font-size: 0.8rem;
+}
+
+.history-edge button.link {
+  margin-top: 0;
 }

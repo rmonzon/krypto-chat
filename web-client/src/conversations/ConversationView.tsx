@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { compareMessages, type ChatDb } from '../lib/db'
 import type { Conversation, Message } from '../lib/types'
@@ -13,7 +13,12 @@ type Props = {
   onRetry: (message: Message) => void
   /** Called with the highest peer seq while the conversation is visible. */
   onRead: (seq: number) => void
+  /** Loads the page before beforeSeq; resolves with how many messages were fetched. */
+  onLoadOlder: (beforeSeq: number) => Promise<number>
 }
+
+// Stable fallback while the live query loads, so effects keyed on messages don't rerun every render.
+const NO_MESSAGES: Message[] = []
 
 /** What to show under one of my messages. Delivered/read come from the peer's watermarks. */
 function statusText(m: Message, conversation: Conversation, online: boolean) {
@@ -39,6 +44,7 @@ export function ConversationView({
   onSend,
   onRetry,
   onRead,
+  onLoadOlder,
 }: Props) {
   const [draft, setDraft] = useState('')
   const messages = useLiveQuery(
@@ -47,12 +53,67 @@ export function ConversationView({
         compareMessages,
       ),
     [db, conversation.id],
-  ) ?? []
+  ) ?? NO_MESSAGES
+  const listRef = useRef<HTMLOListElement>(null)
+  const topRef = useRef<HTMLLIElement>(null)
   const bottomRef = useRef<HTMLLIElement>(null)
 
-  useEffect(() => {
+  // Jump to the bottom when a message is appended (sent, received, or first
+  // load), but not when older history is prepended above.
+  const last = messages.at(-1)
+  const lastKey = last ? `${last.sender_id}:${last.client_msg_id}` : null
+  useLayoutEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' })
-  }, [messages.length])
+  }, [lastKey])
+
+  // Seqs are gap-free from 1, so anything above 1 means there's older history.
+  const seqs = messages.filter((m) => m.seq !== null).map((m) => m.seq!)
+  const oldestSeq = seqs.length ? Math.min(...seqs) : null
+  const hasOlder = oldestSeq !== null && oldestSeq > 1
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [olderFailed, setOlderFailed] = useState(false)
+  // Scroll position captured before prepending, restored once the list grows.
+  const anchor = useRef<{ height: number; top: number } | null>(null)
+
+  const loadOlder = useCallback(async () => {
+    const list = listRef.current
+    if (!list || !hasOlder || loadingOlder) return
+    anchor.current = { height: list.scrollHeight, top: list.scrollTop }
+    setLoadingOlder(true)
+    setOlderFailed(false)
+    try {
+      if ((await onLoadOlder(oldestSeq)) === 0) anchor.current = null
+    } catch {
+      anchor.current = null
+      setOlderFailed(true)
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [hasOlder, loadingOlder, oldestSeq, onLoadOlder])
+
+  // Keep the reader's place: shift scrollTop by however much was added above.
+  useLayoutEffect(() => {
+    const list = listRef.current
+    const saved = anchor.current
+    if (!list || !saved || list.scrollHeight === saved.height) return
+    list.scrollTop = saved.top + (list.scrollHeight - saved.height)
+    anchor.current = null
+  }, [messages])
+
+  // Load older history when the top of the list scrolls into view.
+  useEffect(() => {
+    const list = listRef.current
+    const top = topRef.current
+    if (!list || !top || !hasOlder || olderFailed) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) void loadOlder()
+      },
+      { root: list, rootMargin: '200px 0px 0px 0px' },
+    )
+    observer.observe(top)
+    return () => observer.disconnect()
+  }, [hasOlder, olderFailed, loadOlder])
 
   // Mark the peer's latest message read while this conversation is on screen.
   const latestPeerSeq = Math.max(
@@ -84,7 +145,15 @@ export function ConversationView({
         <span className="muted">@{conversation.peer.username}</span>
       </header>
 
-      <ol className="messages">
+      <ol className="messages" ref={listRef}>
+        <li ref={topRef} className="history-edge">
+          {loadingOlder && <span className="muted">Loading older messages…</span>}
+          {olderFailed && (
+            <button type="button" className="link" onClick={() => void loadOlder()}>
+              Couldn't load older messages · retry
+            </button>
+          )}
+        </li>
         {!loaded && messages.length === 0 && <li className="muted">Loading…</li>}
         {loaded && messages.length === 0 && <li className="muted">No messages yet. Say hi!</li>}
         {messages.map((m) => {

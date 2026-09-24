@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "migrate": "tsx --env-file=.env scripts/migrate.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "seed:messages": "tsx --env-file=.env scripts/seed-messages.ts"
   },
   "dependencies": {
     "@fastify/websocket": "^11.3.1",

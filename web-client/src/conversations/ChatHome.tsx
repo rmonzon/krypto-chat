@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { api } from '../lib/api'
 import { advanceCursor, compareConversations, fromServer, type ChatDb } from '../lib/db'
+import { loadOlderMessages } from '../lib/history'
 import { Outbox } from '../lib/outbox'
 import { Receipts } from '../lib/receipts'
 import { ChatSocket, type ConnectionStatus } from '../lib/socket'
@@ -169,6 +170,12 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
     [receipts, selectedId],
   )
 
+  const loadOlder = useCallback(
+    (beforeSeq: number) =>
+      selectedId ? loadOlderMessages(db, selectedId, beforeSeq) : Promise.resolve(0),
+    [db, selectedId],
+  )
+
   const selected = conversations?.find((c) => c.id === selectedId)
 
   return (
@@ -208,6 +215,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
             onSend={(body) => void sendMessage(selected.id, body)}
             onRetry={(m) => void outbox.retry(m.client_msg_id)}
             onRead={markRead}
+            onLoadOlder={loadOlder}
           />
         ) : (
           <p className="muted">Select a conversation.</p>
