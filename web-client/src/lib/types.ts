@@ -9,6 +9,7 @@ export type Conversation = {
   peer: Profile
   last_seq: number
   created_at: string
+  last_message_at: string | null
 }
 
 /** A message as stored by the server. */
@@ -29,6 +30,8 @@ export type MessageStatus = 'sending' | 'sent' | 'failed'
 export type Message = Omit<ServerMessage, 'id' | 'seq'> & {
   seq: number | null
   status: MessageStatus
+  /** Transient server errors so far; the outbox gives up after a few. */
+  attempts?: number
 }
 
 export type ClientEvent = {

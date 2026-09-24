@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useLiveQuery } from 'dexie-react-hooks'
+import { compareMessages, type ChatDb } from '../lib/db'
 import type { Conversation, Message } from '../lib/types'
 
 type Props = {
+  db: ChatDb
   conversation: Conversation
-  messages: Message[]
   loaded: boolean
+  online: boolean
   myId: string
   onSend: (body: string) => void
   onRetry: (message: Message) => void
@@ -12,8 +15,15 @@ type Props = {
 
 const statusLabel = { sending: 'Sending…', sent: 'Sent', failed: 'Failed · tap to retry' }
 
-export function ConversationView({ conversation, messages, loaded, myId, onSend, onRetry }: Props) {
+export function ConversationView({ db, conversation, loaded, online, myId, onSend, onRetry }: Props) {
   const [draft, setDraft] = useState('')
+  const messages = useLiveQuery(
+    async () =>
+      (await db.messages.where('conversation_id').equals(conversation.id).toArray()).sort(
+        compareMessages,
+      ),
+    [db, conversation.id],
+  ) ?? []
   const bottomRef = useRef<HTMLLIElement>(null)
 
   useEffect(() => {
@@ -36,7 +46,7 @@ export function ConversationView({ conversation, messages, loaded, myId, onSend,
       </header>
 
       <ol className="messages">
-        {!loaded && <li className="muted">Loading…</li>}
+        {!loaded && messages.length === 0 && <li className="muted">Loading…</li>}
         {loaded && messages.length === 0 && <li className="muted">No messages yet. Say hi!</li>}
         {messages.map((m) => {
           const mine = m.sender_id === myId
@@ -49,7 +59,9 @@ export function ConversationView({ conversation, messages, loaded, myId, onSend,
                     {statusLabel.failed}
                   </button>
                 ) : (
-                  <span className="status">{statusLabel[m.status]}</span>
+                  <span className="status">
+                    {m.status === 'sending' && !online ? 'Queued' : statusLabel[m.status]}
+                  </span>
                 ))}
             </li>
           )

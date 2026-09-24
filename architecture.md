@@ -33,7 +33,7 @@ krypto-chat/
 
 ### web-client
 - A Vite + React + TypeScript SPA. It uses `supabase-js` for auth only, and talks to `api-server` for everything else.
-- IndexedDB (via Dexie) holds the outbox, the cached messages, and the last seen `seq` per conversation.
+- IndexedDB (via Dexie) is the client's source of truth, with one database per user (`krypto-chat-<userId>`). It holds messages (keyed by `[sender_id, client_msg_id]`), conversations, and the cached profile, so the app opens and shows history while offline. The UI renders from live queries, so any write (local send, ack, incoming message) shows up automatically.
 - A connection manager reconnects with backoff and runs sync after each reconnect.
 
 ### api-server
@@ -61,7 +61,7 @@ krypto-chat/
 
 ## Key mechanics
 1. **Client-generated `client_msg_id` (UUID)**: gives an instant local render, safe retries (the server dedupes on it), and a way to match server acks to local messages.
-2. **Outbox**: each send is written to IndexedDB with status `sending`. A flusher sends queued messages in order whenever the socket is up. That's how offline send works.
+2. **Outbox**: each send is written to IndexedDB with status `sending`, and those messages *are* the outbox. Whenever the socket is ready, the outbox sends them in the order they were written, and resends anything unacked after a reconnect. Offline messages stay `sending` (shown as "Queued") and go out automatically when the connection returns, even after a reload. Transient server errors are retried up to 5 times, 5s apart. Permanent rejections (`invalid_message`, `not_a_member`, `duplicate_client_msg_id`) mark the message `failed`.
 3. **Server `seq` per conversation**: inside one transaction, the server bumps `conversations.last_seq` and assigns the new value to the message. `seq` sets the order and serves as the sync cursor.
 4. **Receipts as watermarks**: the recipient's client sends `delivered_up_to` when messages arrive and `read_up_to` when the conversation is viewed. The server stores both and forwards them to the sender.
 5. **Status derivation (client side)**:
@@ -82,7 +82,7 @@ Every request except `/health` sends `Authorization: Bearer <supabase JWT>`. Sig
 - `POST /profiles {username, display_name}`: create the caller's profile after sign-up. `username` must match `^[a-z0-9_]{3,30}$`. Returns 409 `username_taken` or `profile_exists`
 - `GET /users?q=`: search profiles by username prefix (case-insensitive, excludes the caller, max 20)
 - `POST /conversations {peer_id}`: creates the 1:1 conversation (201) or returns the existing one (200). Errors: 400 `cannot_message_self`, 403 `profile_required`, 404 `user_not_found`
-- `GET /conversations`: the caller's conversations, most recently active first, each as `{id, last_seq, created_at, peer: {id, username, display_name}}`
+- `GET /conversations`: the caller's conversations, most recently active first, each as `{id, last_seq, created_at, last_message_at, peer: {id, username, display_name}}`
 - `GET /conversations/:id/messages?before_seq=&limit=50`: message history in ascending `seq` order (the latest page by default; `before_seq` pages backwards). 404 `conversation_not_found` if the caller isn't a member
 - `GET /sync?cursors=...`
 

@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useLiveQuery } from 'dexie-react-hooks'
 import { api } from '../lib/api'
+import { compareConversations, fromServer, type ChatDb } from '../lib/db'
+import { Outbox } from '../lib/outbox'
 import { ChatSocket, type ConnectionStatus } from '../lib/socket'
 import { supabase } from '../lib/supabase'
 import type { Conversation, Message, Profile, ServerMessage } from '../lib/types'
 import { UserSearch } from '../users/UserSearch'
 import { ConversationList } from './ConversationList'
 import { ConversationView } from './ConversationView'
-import { initialMessagesState, messagesReducer } from './messages'
 
 const getToken = async () => (await supabase.auth.getSession()).data.session?.access_token ?? null
 
@@ -16,74 +18,61 @@ const statusText: Record<ConnectionStatus, string> = {
   offline: 'Offline',
 }
 
-export function ChatHome({ profile }: { profile: Profile }) {
+export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
   const [socket] = useState(() => new ChatSocket(getToken))
+  const [outbox] = useState(() => new Outbox(db, socket, profile.id))
   const [connection, setConnection] = useState<ConnectionStatus>(socket.status)
-  const [conversations, setConversations] = useState<Conversation[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [messages, dispatch] = useReducer(messagesReducer, initialMessagesState)
+  // Conversations whose latest history page was fetched this session.
+  const [loaded, setLoaded] = useState<Record<string, boolean>>({})
   const [error, setError] = useState<string | null>(null)
 
-  // Read by the socket listener, which is registered once.
-  const knownConversations = useRef(new Set<string>())
+  const conversations = useLiveQuery(
+    async () => (await db.conversations.toArray()).sort(compareConversations),
+    [db],
+  )
+
+  const loadConversations = useCallback(async () => {
+    try {
+      const { conversations } = await api<{ conversations: Conversation[] }>('/conversations')
+      await db.conversations.bulkPut(conversations)
+    } catch {
+      // Offline: the cached list is still shown.
+    }
+  }, [db])
+
+  const touchConversation = useCallback(
+    async (conversationId: string, at: string) => {
+      const found = await db.conversations.update(conversationId, { last_message_at: at })
+      if (!found) await loadConversations()
+    },
+    [db, loadConversations],
+  )
+
   useEffect(() => {
-    knownConversations.current = new Set(conversations.map((c) => c.id))
-  }, [conversations])
-
-  const loadConversations = useCallback(() => {
-    api<{ conversations: Conversation[] }>('/conversations')
-      .then(({ conversations }) => setConversations(conversations))
-      .catch(() => setError('Could not load conversations.'))
-  }, [])
-
-  const addConversation = useCallback((conversation: Conversation) => {
-    setConversations((prev) =>
-      prev.some((c) => c.id === conversation.id) ? prev : [conversation, ...prev],
-    )
-  }, [])
-
-  const moveToTop = useCallback((conversationId: string) => {
-    setConversations((prev) => {
-      const target = prev.find((c) => c.id === conversationId)
-      return target ? [target, ...prev.filter((c) => c !== target)] : prev
-    })
-  }, [])
-
-  useEffect(loadConversations, [loadConversations])
+    void loadConversations()
+  }, [loadConversations])
 
   useEffect(() => {
     const offStatus = socket.onStatus((status) => {
       setConnection(status)
-      if (status === 'offline') dispatch({ type: 'sending_failed' })
+      if (status === 'online') outbox.onOnline()
     })
-    const offEvent = socket.onEvent((event) => {
+    const offEvent = socket.onEvent(async (event) => {
       switch (event.type) {
         case 'message.ack':
-          dispatch({
-            type: 'acked',
-            conversationId: event.conversation_id,
-            senderId: profile.id,
-            clientMsgId: event.client_msg_id,
-            seq: event.seq,
-            createdAt: event.created_at,
-          })
-          moveToTop(event.conversation_id)
+          await outbox.onAck(event)
+          await touchConversation(event.conversation_id, event.created_at)
           break
         case 'message.new':
-          dispatch({ type: 'received', message: event.message })
-          if (knownConversations.current.has(event.message.conversation_id)) {
-            moveToTop(event.message.conversation_id)
-          } else {
-            loadConversations()
-          }
+          await db.messages.put(fromServer(event.message))
+          await touchConversation(event.message.conversation_id, event.message.created_at)
           break
         case 'conversation.new':
-          addConversation(event.conversation)
+          await db.conversations.put(event.conversation)
           break
         case 'error':
-          if (event.client_msg_id) {
-            dispatch({ type: 'status_changed', clientMsgIds: [event.client_msg_id], status: 'failed' })
-          }
+          await outbox.onError(event)
           break
       }
     })
@@ -93,17 +82,19 @@ export function ChatHome({ profile }: { profile: Profile }) {
       offEvent()
       socket.stop()
     }
-  }, [socket, profile.id, loadConversations, addConversation, moveToTop])
+  }, [socket, outbox, db, touchConversation])
 
-  // Load history the first time a conversation is opened.
+  // Fetch the latest page of history the first time a conversation is opened
+  // this session. Cached messages show immediately in the meantime.
   useEffect(() => {
-    if (!selectedId || messages.loaded[selectedId]) return
+    if (!selectedId || loaded[selectedId]) return
     api<{ messages: ServerMessage[] }>(`/conversations/${selectedId}/messages`)
-      .then(({ messages }) =>
-        dispatch({ type: 'history_loaded', conversationId: selectedId, messages }),
-      )
-      .catch(() => setError('Could not load messages.'))
-  }, [selectedId, messages.loaded])
+      .then(async ({ messages }) => {
+        await db.messages.bulkPut(messages.map(fromServer))
+        setLoaded((prev) => ({ ...prev, [selectedId]: true }))
+      })
+      .catch(() => setError('Could not load messages. Showing cached history.'))
+  }, [selectedId, loaded, db])
 
   async function openConversationWith(user: Profile) {
     setError(null)
@@ -112,28 +103,15 @@ export function ChatHome({ profile }: { profile: Profile }) {
         method: 'POST',
         body: JSON.stringify({ peer_id: user.id }),
       })
-      addConversation(conversation)
+      await db.conversations.put(conversation)
       setSelectedId(conversation.id)
     } catch {
       setError(`Could not start a conversation with @${user.username}.`)
     }
   }
 
-  function transmit(message: Message) {
-    const sent = socket.send({
-      type: 'message.send',
-      client_msg_id: message.client_msg_id,
-      conversation_id: message.conversation_id,
-      content_type: message.content_type,
-      body: message.body,
-    })
-    // Offline: fail now. Step 5 replaces this with a persistent outbox.
-    if (!sent) {
-      dispatch({ type: 'status_changed', clientMsgIds: [message.client_msg_id], status: 'failed' })
-    }
-  }
-
-  function sendMessage(conversationId: string, body: string) {
+  async function sendMessage(conversationId: string, body: string) {
+    const now = new Date().toISOString()
     const message: Message = {
       client_msg_id: crypto.randomUUID(),
       conversation_id: conversationId,
@@ -141,19 +119,14 @@ export function ChatHome({ profile }: { profile: Profile }) {
       content_type: 'text/plain',
       body,
       seq: null,
-      created_at: new Date().toISOString(),
+      created_at: now,
       status: 'sending',
     }
-    dispatch({ type: 'added', message })
-    transmit(message)
+    await outbox.enqueue(message)
+    await db.conversations.update(conversationId, { last_message_at: now })
   }
 
-  function retry(message: Message) {
-    dispatch({ type: 'status_changed', clientMsgIds: [message.client_msg_id], status: 'sending' })
-    transmit(message)
-  }
-
-  const selected = conversations.find((c) => c.id === selectedId)
+  const selected = conversations?.find((c) => c.id === selectedId)
 
   return (
     <div className="chat">
@@ -172,21 +145,25 @@ export function ChatHome({ profile }: { profile: Profile }) {
         {error && <p className="error">{error}</p>}
         <h2>Conversations</h2>
         <ConversationList
-          conversations={conversations}
+          conversations={conversations ?? []}
           selectedId={selectedId}
-          onSelect={setSelectedId}
+          onSelect={(id) => {
+            setError(null)
+            setSelectedId(id)
+          }}
         />
       </aside>
       <main>
         {selected ? (
           <ConversationView
             key={selected.id}
+            db={db}
             conversation={selected}
-            messages={messages.byConversation[selected.id] ?? []}
-            loaded={messages.loaded[selected.id] ?? false}
+            loaded={loaded[selected.id] ?? false}
+            online={connection === 'online'}
             myId={profile.id}
-            onSend={(body) => sendMessage(selected.id, body)}
-            onRetry={retry}
+            onSend={(body) => void sendMessage(selected.id, body)}
+            onRetry={(m) => void outbox.retry(m.client_msg_id)}
           />
         ) : (
           <p className="muted">Select a conversation.</p>
