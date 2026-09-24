@@ -7,8 +7,8 @@ import { profileRoutes } from "./routes/profiles.js";
 import { syncRoutes } from "./routes/sync.js";
 import { userRoutes } from "./routes/users.js";
 
-export async function buildApp() {
-  const app = Fastify({ logger: true });
+export async function buildApp({ logger = true }: { logger?: boolean } = {}) {
+  const app = Fastify({ logger });
 
   app.decorateRequest("userId", "");
 

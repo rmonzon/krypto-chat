@@ -1,5 +1,5 @@
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 
 const apiTarget = process.env.API_URL ?? 'http://localhost:3000'
 
@@ -12,5 +12,9 @@ export default defineConfig({
       '/api': { target: apiTarget, rewrite: (path) => path.replace(/^\/api/, '') },
       '/ws': { target: apiTarget, ws: true },
     },
+  },
+  test: {
+    environment: 'node',
+    setupFiles: ['src/test/setup.ts'],
   },
 })
