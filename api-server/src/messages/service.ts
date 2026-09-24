@@ -86,6 +86,34 @@ export async function sendMessage(
   });
 }
 
+/** Messages with seq > afterSeq, oldest first. Caller must check membership. */
+export async function messagesAfter(
+  conversationId: string,
+  afterSeq: number,
+  limit: number,
+): Promise<MessageDto[]> {
+  const { rows } = await pool.query<MessageRow>(
+    `select ${messageColumns} from messages
+     where conversation_id = $1 and seq > $2
+     order by seq
+     limit $3`,
+    [conversationId, afterSeq, limit],
+  );
+  return rows.map(toMessage);
+}
+
+/** The latest `limit` messages, oldest first. Caller must check membership. */
+export async function latestMessages(conversationId: string, limit: number): Promise<MessageDto[]> {
+  const { rows } = await pool.query<MessageRow>(
+    `select ${messageColumns} from messages
+     where conversation_id = $1
+     order by seq desc
+     limit $2`,
+    [conversationId, limit],
+  );
+  return rows.map(toMessage).reverse();
+}
+
 /**
  * Up to `limit` messages before `beforeSeq` (or the latest), in ascending seq
  * order. Returns undefined if the user isn't a member.

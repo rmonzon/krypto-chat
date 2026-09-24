@@ -66,3 +66,9 @@ export type ServerEvent =
       read_up_to_seq: number
     }
   | { type: 'error'; reason: string; client_msg_id?: string }
+
+export type SyncResponse = {
+  conversations: Conversation[]
+  messages: ServerMessage[]
+  has_more: boolean
+}

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { api } from '../lib/api'
-import { compareConversations, fromServer, type ChatDb } from '../lib/db'
+import { advanceCursor, compareConversations, fromServer, type ChatDb } from '../lib/db'
 import { Outbox } from '../lib/outbox'
 import { Receipts } from '../lib/receipts'
 import { ChatSocket, type ConnectionStatus } from '../lib/socket'
+import { Syncer } from '../lib/sync'
 import { supabase } from '../lib/supabase'
 import type { Conversation, Message, Profile, ServerMessage } from '../lib/types'
 import { UserSearch } from '../users/UserSearch'
@@ -23,6 +24,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
   const [socket] = useState(() => new ChatSocket(getToken))
   const [outbox] = useState(() => new Outbox(db, socket, profile.id))
   const [receipts] = useState(() => new Receipts(socket))
+  const [syncer] = useState(() => new Syncer(db, profile.id, receipts))
   const [connection, setConnection] = useState<ConnectionStatus>(socket.status)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // Conversations whose latest history page was fetched this session.
@@ -59,19 +61,23 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
     const offStatus = socket.onStatus((status) => {
       setConnection(status)
       if (status === 'online') {
+        // Resend what we owe the server, then catch up on what we missed.
         outbox.onOnline()
         receipts.onOnline()
+        void syncer.run()
       }
     })
     const offEvent = socket.onEvent(async (event) => {
       switch (event.type) {
         case 'message.ack':
           await outbox.onAck(event)
+          await advanceCursor(db, event.conversation_id, event.seq, event.seq)
           await touchConversation(event.conversation_id, event.created_at)
           break
         case 'message.new': {
           const { message } = event
           await db.messages.put(fromServer(message))
+          await advanceCursor(db, message.conversation_id, message.seq, message.seq)
           await touchConversation(message.conversation_id, message.created_at)
           if (message.sender_id !== profile.id) receipts.markDelivered(message.conversation_id, message.seq)
           break
@@ -106,7 +112,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
       offEvent()
       socket.stop()
     }
-  }, [socket, outbox, receipts, db, profile.id, touchConversation])
+  }, [socket, outbox, receipts, syncer, db, profile.id, touchConversation])
 
   // Fetch the latest page of history the first time a conversation is opened
   // this session. Cached messages show immediately in the meantime.
@@ -115,6 +121,10 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
     api<{ messages: ServerMessage[] }>(`/conversations/${selectedId}/messages`)
       .then(async ({ messages }) => {
         await db.messages.bulkPut(messages.map(fromServer))
+        if (messages.length) {
+          const seqs = messages.map((m) => m.seq)
+          await advanceCursor(db, selectedId, Math.min(...seqs), Math.max(...seqs), true)
+        }
         setLoaded((prev) => ({ ...prev, [selectedId]: true }))
         const peerSeqs = messages.filter((m) => m.sender_id !== profile.id).map((m) => m.seq)
         if (peerSeqs.length) receipts.markDelivered(selectedId, Math.max(...peerSeqs))

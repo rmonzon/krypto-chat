@@ -72,7 +72,7 @@ krypto-chat/
    | `delivered` | `seq` ≤ the peer's `delivered_up_to_seq` |
    | `read` | `seq` ≤ the peer's `read_up_to_seq` |
    | `failed` | The server rejected it (validation/auth) or retries ran out. The user can tap to retry. |
-6. **Reconnect sync**: after the socket reconnects, (a) flush the outbox, then (b) call `GET /sync` with the client's cursors. The response holds the messages with `seq > cursor` and the current watermarks for each conversation.
+6. **Reconnect sync**: every time the socket becomes ready, the client (a) resends its outbox and receipts, and (b) calls `POST /sync` with its **cursors**. A cursor is the seq up to which a conversation is stored locally with no gaps. It only advances over a range that connects to it: sync pages, the latest history page, or a live message/ack with exactly the next seq. That way a live message arriving right after a reconnect can't skip past messages missed while offline. The response holds all conversations (with current watermarks) plus the messages after each cursor. Conversations without a cursor get their latest page, and older history loads on demand. The client repeats while `has_more` is set, then sends delivered receipts for what it received.
 7. **E2EE-ready**: `body` is an opaque payload tagged with `content_type` (and a version). The server never parses it, so we can switch to ciphertext later without schema changes.
 
 ## API (draft)
@@ -84,7 +84,7 @@ Every request except `/health` sends `Authorization: Bearer <supabase JWT>`. Sig
 - `POST /conversations {peer_id}`: creates the 1:1 conversation (201) or returns the existing one (200). Errors: 400 `cannot_message_self`, 403 `profile_required`, 404 `user_not_found`
 - `GET /conversations`: the caller's conversations, most recently active first, each as `{id, last_seq, created_at, last_message_at, peer: {id, username, display_name}, peer_delivered_up_to_seq, peer_read_up_to_seq}`
 - `GET /conversations/:id/messages?before_seq=&limit=50`: message history in ascending `seq` order (the latest page by default; `before_seq` pages backwards). 404 `conversation_not_found` if the caller isn't a member
-- `GET /sync?cursors=...`
+- `POST /sync {cursors: {<conversation_id>: seq}}`: catch-up after (re)connecting. Returns `{conversations, messages, has_more}`: messages after each cursor (up to 100 per conversation), or the latest 50 for conversations with no cursor. `has_more` means call again with the advanced cursors
 
 ### WebSocket events
 Browsers can't set headers on a WebSocket, and a token in the URL would end up in logs, so the client authenticates with its first message: `auth {token}`. The server replies `ready {user_id}`, or closes the socket with code `4401` if the token is invalid or doesn't arrive within 5s. Every event is a JSON object with a `type` field. The server handles each socket's events one at a time, in order, and pings every 30s to drop dead connections.

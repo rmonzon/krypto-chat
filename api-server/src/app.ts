@@ -4,6 +4,7 @@ import { pool } from "./db.js";
 import { registerRealtime } from "./realtime/index.js";
 import { conversationRoutes } from "./routes/conversations.js";
 import { profileRoutes } from "./routes/profiles.js";
+import { syncRoutes } from "./routes/sync.js";
 import { userRoutes } from "./routes/users.js";
 
 export async function buildApp() {
@@ -27,6 +28,7 @@ export async function buildApp() {
     await authed.register(profileRoutes);
     await authed.register(userRoutes);
     await authed.register(conversationRoutes);
+    await authed.register(syncRoutes);
   });
 
   await registerRealtime(app);
