@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { api } from '../lib/api'
 import { compareConversations, fromServer, type ChatDb } from '../lib/db'
 import { Outbox } from '../lib/outbox'
+import { Receipts } from '../lib/receipts'
 import { ChatSocket, type ConnectionStatus } from '../lib/socket'
 import { supabase } from '../lib/supabase'
 import type { Conversation, Message, Profile, ServerMessage } from '../lib/types'
@@ -21,6 +22,7 @@ const statusText: Record<ConnectionStatus, string> = {
 export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
   const [socket] = useState(() => new ChatSocket(getToken))
   const [outbox] = useState(() => new Outbox(db, socket, profile.id))
+  const [receipts] = useState(() => new Receipts(socket))
   const [connection, setConnection] = useState<ConnectionStatus>(socket.status)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // Conversations whose latest history page was fetched this session.
@@ -56,7 +58,10 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
   useEffect(() => {
     const offStatus = socket.onStatus((status) => {
       setConnection(status)
-      if (status === 'online') outbox.onOnline()
+      if (status === 'online') {
+        outbox.onOnline()
+        receipts.onOnline()
+      }
     })
     const offEvent = socket.onEvent(async (event) => {
       switch (event.type) {
@@ -64,12 +69,31 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
           await outbox.onAck(event)
           await touchConversation(event.conversation_id, event.created_at)
           break
-        case 'message.new':
-          await db.messages.put(fromServer(event.message))
-          await touchConversation(event.message.conversation_id, event.message.created_at)
+        case 'message.new': {
+          const { message } = event
+          await db.messages.put(fromServer(message))
+          await touchConversation(message.conversation_id, message.created_at)
+          if (message.sender_id !== profile.id) receipts.markDelivered(message.conversation_id, message.seq)
           break
+        }
         case 'conversation.new':
           await db.conversations.put(event.conversation)
+          break
+        case 'receipt.update':
+          // Our own receipts (from other tabs) don't change any message status.
+          if (event.user_id !== profile.id) {
+            await db.conversations
+              .where('id')
+              .equals(event.conversation_id)
+              .modify((c) => {
+                // ?? 0: conversations cached before receipts existed lack these fields.
+                c.peer_delivered_up_to_seq = Math.max(
+                  c.peer_delivered_up_to_seq ?? 0,
+                  event.delivered_up_to_seq,
+                )
+                c.peer_read_up_to_seq = Math.max(c.peer_read_up_to_seq ?? 0, event.read_up_to_seq)
+              })
+          }
           break
         case 'error':
           await outbox.onError(event)
@@ -82,7 +106,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
       offEvent()
       socket.stop()
     }
-  }, [socket, outbox, db, touchConversation])
+  }, [socket, outbox, receipts, db, profile.id, touchConversation])
 
   // Fetch the latest page of history the first time a conversation is opened
   // this session. Cached messages show immediately in the meantime.
@@ -92,9 +116,11 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
       .then(async ({ messages }) => {
         await db.messages.bulkPut(messages.map(fromServer))
         setLoaded((prev) => ({ ...prev, [selectedId]: true }))
+        const peerSeqs = messages.filter((m) => m.sender_id !== profile.id).map((m) => m.seq)
+        if (peerSeqs.length) receipts.markDelivered(selectedId, Math.max(...peerSeqs))
       })
       .catch(() => setError('Could not load messages. Showing cached history.'))
-  }, [selectedId, loaded, db])
+  }, [selectedId, loaded, db, profile.id, receipts])
 
   async function openConversationWith(user: Profile) {
     setError(null)
@@ -125,6 +151,13 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
     await outbox.enqueue(message)
     await db.conversations.update(conversationId, { last_message_at: now })
   }
+
+  const markRead = useCallback(
+    (seq: number) => {
+      if (selectedId) receipts.markRead(selectedId, seq)
+    },
+    [receipts, selectedId],
+  )
 
   const selected = conversations?.find((c) => c.id === selectedId)
 
@@ -164,6 +197,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
             myId={profile.id}
             onSend={(body) => void sendMessage(selected.id, body)}
             onRetry={(m) => void outbox.retry(m.client_msg_id)}
+            onRead={markRead}
           />
         ) : (
           <p className="muted">Select a conversation.</p>

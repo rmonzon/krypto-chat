@@ -63,7 +63,7 @@ krypto-chat/
 1. **Client-generated `client_msg_id` (UUID)**: gives an instant local render, safe retries (the server dedupes on it), and a way to match server acks to local messages.
 2. **Outbox**: each send is written to IndexedDB with status `sending`, and those messages *are* the outbox. Whenever the socket is ready, the outbox sends them in the order they were written, and resends anything unacked after a reconnect. Offline messages stay `sending` (shown as "Queued") and go out automatically when the connection returns, even after a reload. Transient server errors are retried up to 5 times, 5s apart. Permanent rejections (`invalid_message`, `not_a_member`, `duplicate_client_msg_id`) mark the message `failed`.
 3. **Server `seq` per conversation**: inside one transaction, the server bumps `conversations.last_seq` and assigns the new value to the message. `seq` sets the order and serves as the sync cursor.
-4. **Receipts as watermarks**: the recipient's client sends `delivered_up_to` when messages arrive and `read_up_to` when the conversation is viewed. The server stores both and forwards them to the sender.
+4. **Receipts as watermarks**: the recipient's client sends `receipt.delivered {seq}` when messages from the peer arrive (live or via history), and `receipt.read {seq}` while the conversation is open and the tab is visible. The server clamps `seq` to the conversation's `last_seq`, only moves watermarks forward (read implies delivered), and broadcasts `receipt.update` only when something changed. Clients keep just the highest seq per conversation and resend it after a reconnect.
 5. **Status derivation (client side)**:
    | Status | Condition |
    |---|---|
@@ -82,7 +82,7 @@ Every request except `/health` sends `Authorization: Bearer <supabase JWT>`. Sig
 - `POST /profiles {username, display_name}`: create the caller's profile after sign-up. `username` must match `^[a-z0-9_]{3,30}$`. Returns 409 `username_taken` or `profile_exists`
 - `GET /users?q=`: search profiles by username prefix (case-insensitive, excludes the caller, max 20)
 - `POST /conversations {peer_id}`: creates the 1:1 conversation (201) or returns the existing one (200). Errors: 400 `cannot_message_self`, 403 `profile_required`, 404 `user_not_found`
-- `GET /conversations`: the caller's conversations, most recently active first, each as `{id, last_seq, created_at, last_message_at, peer: {id, username, display_name}}`
+- `GET /conversations`: the caller's conversations, most recently active first, each as `{id, last_seq, created_at, last_message_at, peer: {id, username, display_name}, peer_delivered_up_to_seq, peer_read_up_to_seq}`
 - `GET /conversations/:id/messages?before_seq=&limit=50`: message history in ascending `seq` order (the latest page by default; `before_seq` pages backwards). 404 `conversation_not_found` if the caller isn't a member
 - `GET /sync?cursors=...`
 
@@ -98,8 +98,9 @@ Browsers can't set headers on a WebSocket, and a token in the URL would end up i
   - `message.ack {client_msg_id, conversation_id, seq, created_at}`: sent to the socket that sent the message, including for retries of a message that's already stored
   - `message.new {message}`: sent to every member's other sockets. Not re-sent for a retry of an already stored message
   - `conversation.new {conversation}`: sent to the peer when a conversation is created
+  - `receipt.update {conversation_id, user_id, delivered_up_to_seq, read_up_to_seq}`: sent to all members' other sockets when a watermark moves forward
   - `receipt.update {conversation_id, user_id, delivered_up_to, read_up_to}`
-  - `error {client_msg_id?, reason}`: reasons are `invalid_message`, `not_a_member`, `duplicate_client_msg_id` (the same ID was used in another conversation), `internal_error`, `invalid_json`, `unknown_event`
+  - `error {client_msg_id?, reason}`: reasons are `invalid_message`, `invalid_receipt`, `not_a_member`, `duplicate_client_msg_id` (the same ID was used in another conversation), `internal_error`, `invalid_json`, `unknown_event`
 
 ## Build order
 1. `api-server` skeleton + migrations; `web-client` skeleton; Supabase dev project

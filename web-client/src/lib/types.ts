@@ -10,6 +10,9 @@ export type Conversation = {
   last_seq: number
   created_at: string
   last_message_at: string | null
+  /** How far the peer has received / read, as conversation seqs. */
+  peer_delivered_up_to_seq: number
+  peer_read_up_to_seq: number
 }
 
 /** A message as stored by the server. */
@@ -34,13 +37,15 @@ export type Message = Omit<ServerMessage, 'id' | 'seq'> & {
   attempts?: number
 }
 
-export type ClientEvent = {
-  type: 'message.send'
-  client_msg_id: string
-  conversation_id: string
-  content_type: string
-  body: string
-}
+export type ClientEvent =
+  | {
+      type: 'message.send'
+      client_msg_id: string
+      conversation_id: string
+      content_type: string
+      body: string
+    }
+  | { type: 'receipt.delivered' | 'receipt.read'; conversation_id: string; seq: number }
 
 export type ServerEvent =
   | { type: 'ready'; user_id: string }
@@ -53,4 +58,11 @@ export type ServerEvent =
     }
   | { type: 'message.new'; message: ServerMessage }
   | { type: 'conversation.new'; conversation: Conversation }
+  | {
+      type: 'receipt.update'
+      conversation_id: string
+      user_id: string
+      delivered_up_to_seq: number
+      read_up_to_seq: number
+    }
   | { type: 'error'; reason: string; client_msg_id?: string }

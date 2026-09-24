@@ -2,6 +2,7 @@ import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import websocket from "@fastify/websocket";
 import type { WebSocket } from "ws";
 import { verifyAccessToken } from "../auth.js";
+import { advanceReceipt, type ReceiptKind } from "../conversations/service.js";
 import { sendMessage, type SendMessageInput } from "../messages/service.js";
 import { addConnection, notifyUser, removeConnection, sendEvent } from "./connections.js";
 
@@ -23,6 +24,40 @@ function parseSendMessage(event: Record<string, unknown>): SendMessageInput | un
     return undefined;
   if (typeof body !== "string" || body.length < 1 || body.length > 10_000) return undefined;
   return { client_msg_id, conversation_id, content_type, body };
+}
+
+function parseReceipt(event: Record<string, unknown>) {
+  const { conversation_id, seq } = event;
+  if (typeof conversation_id !== "string" || !UUID.test(conversation_id)) return undefined;
+  if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 1) return undefined;
+  return { conversation_id, seq };
+}
+
+async function handleReceipt(
+  userId: string,
+  socket: WebSocket,
+  kind: ReceiptKind,
+  event: Record<string, unknown>,
+) {
+  const receipt = parseReceipt(event);
+  if (!receipt) return sendEvent(socket, { type: "error", reason: "invalid_receipt" });
+
+  const result = await advanceReceipt(userId, receipt.conversation_id, kind, receipt.seq);
+  if (!result) return; // no progress, or not a member: nothing to tell anyone
+
+  for (const memberId of result.memberIds) {
+    notifyUser(
+      memberId,
+      {
+        type: "receipt.update",
+        conversation_id: receipt.conversation_id,
+        user_id: userId,
+        delivered_up_to_seq: result.delivered_up_to_seq,
+        read_up_to_seq: result.read_up_to_seq,
+      },
+      socket,
+    );
+  }
 }
 
 async function handleEvent(userId: string, socket: WebSocket, event: Record<string, unknown>) {
@@ -60,6 +95,10 @@ async function handleEvent(userId: string, socket: WebSocket, event: Record<stri
       }
       return;
     }
+    case "receipt.delivered":
+      return handleReceipt(userId, socket, "delivered", event);
+    case "receipt.read":
+      return handleReceipt(userId, socket, "read", event);
     default:
       return sendEvent(socket, { type: "error", reason: "unknown_event" });
   }

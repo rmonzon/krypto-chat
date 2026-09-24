@@ -13,4 +13,11 @@ export type ServerEvent =
     }
   | { type: "message.new"; message: MessageDto }
   | { type: "conversation.new"; conversation: ConversationDto }
+  | {
+      type: "receipt.update";
+      conversation_id: string;
+      user_id: string;
+      delivered_up_to_seq: number;
+      read_up_to_seq: number;
+    }
   | { type: "error"; reason: string; client_msg_id?: string };

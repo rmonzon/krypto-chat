@@ -11,11 +11,35 @@ type Props = {
   myId: string
   onSend: (body: string) => void
   onRetry: (message: Message) => void
+  /** Called with the highest peer seq while the conversation is visible. */
+  onRead: (seq: number) => void
 }
 
-const statusLabel = { sending: 'Sending…', sent: 'Sent', failed: 'Failed · tap to retry' }
+/** What to show under one of my messages. Delivered/read come from the peer's watermarks. */
+function statusText(m: Message, conversation: Conversation, online: boolean) {
+  switch (m.status) {
+    case 'sending':
+      return online ? 'Sending…' : 'Queued'
+    case 'failed':
+      return 'Failed · tap to retry'
+    case 'sent':
+      if (m.seq === null) return 'Sent'
+      if (m.seq <= conversation.peer_read_up_to_seq) return 'Read'
+      if (m.seq <= conversation.peer_delivered_up_to_seq) return 'Delivered'
+      return 'Sent'
+  }
+}
 
-export function ConversationView({ db, conversation, loaded, online, myId, onSend, onRetry }: Props) {
+export function ConversationView({
+  db,
+  conversation,
+  loaded,
+  online,
+  myId,
+  onSend,
+  onRetry,
+  onRead,
+}: Props) {
   const [draft, setDraft] = useState('')
   const messages = useLiveQuery(
     async () =>
@@ -29,6 +53,21 @@ export function ConversationView({ db, conversation, loaded, online, myId, onSen
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' })
   }, [messages.length])
+
+  // Mark the peer's latest message read while this conversation is on screen.
+  const latestPeerSeq = Math.max(
+    0,
+    ...messages.filter((m) => m.sender_id !== myId && m.seq !== null).map((m) => m.seq!),
+  )
+  useEffect(() => {
+    if (!latestPeerSeq) return
+    const markIfVisible = () => {
+      if (document.visibilityState === 'visible') onRead(latestPeerSeq)
+    }
+    markIfVisible()
+    document.addEventListener('visibilitychange', markIfVisible)
+    return () => document.removeEventListener('visibilitychange', markIfVisible)
+  }, [latestPeerSeq, onRead])
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -56,12 +95,10 @@ export function ConversationView({ db, conversation, loaded, online, myId, onSen
               {mine &&
                 (m.status === 'failed' ? (
                   <button type="button" className="status failed" onClick={() => onRetry(m)}>
-                    {statusLabel.failed}
+                    {statusText(m, conversation, online)}
                   </button>
                 ) : (
-                  <span className="status">
-                    {m.status === 'sending' && !online ? 'Queued' : statusLabel[m.status]}
-                  </span>
+                  <span className="status">{statusText(m, conversation, online)}</span>
                 ))}
             </li>
           )
