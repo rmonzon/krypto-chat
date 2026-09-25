@@ -12,10 +12,14 @@ export function fakeSocket(status: ConnectionStatus = 'online') {
   const fake = {
     status,
     sent: [] as ClientEvent[],
+    reconnects: 0,
     send(event: ClientEvent) {
       if (fake.status !== 'online') return false
       fake.sent.push(event)
       return true
+    },
+    reconnect() {
+      fake.reconnects++
     },
   }
   return fake as typeof fake & ChatSocket
@@ -50,4 +54,40 @@ export function serverMessage(overrides: Partial<ServerMessage> = {}): ServerMes
     created_at: '2026-01-01T00:00:00.000Z',
     ...overrides,
   }
+}
+
+/** A minimal exclusive Web Locks implementation (Node has no navigator.locks). */
+export function fakeLocks(): Pick<LockManager, 'request'> {
+  const held = new Set<string>()
+  const waiting = new Map<string, Array<() => void>>()
+
+  function request(
+    name: string,
+    options: LockOptions,
+    callback: (lock: Lock | null) => Promise<unknown>,
+  ): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const run = () => {
+        held.add(name)
+        callback({ name, mode: 'exclusive' } as Lock)
+          .then(resolve, reject)
+          .finally(() => {
+            held.delete(name)
+            waiting.get(name)?.shift()?.()
+          })
+      }
+      if (!held.has(name)) return run()
+      const queue = waiting.get(name) ?? []
+      waiting.set(name, queue)
+      queue.push(run)
+      options.signal?.addEventListener('abort', () => {
+        const index = queue.indexOf(run)
+        if (index !== -1) {
+          queue.splice(index, 1)
+          reject(new DOMException('Aborted', 'AbortError'))
+        }
+      })
+    })
+  }
+  return { request: request as LockManager['request'] }
 }

@@ -33,7 +33,7 @@ krypto-chat/
 
 ### web-client
 - A Vite + React + TypeScript SPA. It uses `supabase-js` for auth only, and talks to `api-server` for everything else.
-- IndexedDB (via Dexie) is the client's source of truth, with one database per user (`krypto-chat-<userId>`). It holds messages (keyed by `[sender_id, client_msg_id]`), conversations, and the cached profile, so the app opens and shows history while offline. The UI renders from live queries, so any write (local send, ack, incoming message) shows up automatically.
+- IndexedDB (via Dexie) is the client's source of truth, with one database per user (`krypto-chat-<userId>`). It holds messages (keyed by `[sender_id, client_msg_id]`), conversations, and the cached profile, so the app opens and shows history while offline. Signing out deletes it. If there are unsent messages, the user confirms first, since they'd be lost. The UI renders from live queries, so any write (local send, ack, incoming message) shows up automatically.
 - A connection manager reconnects with backoff and runs sync after each reconnect.
 
 ### api-server
@@ -61,7 +61,7 @@ krypto-chat/
 
 ## Key mechanics
 1. **Client-generated `client_msg_id` (UUID)**: gives an instant local render, safe retries (the server dedupes on it), and a way to match server acks to local messages.
-2. **Outbox**: each send is written to IndexedDB with status `sending`, and those messages *are* the outbox. Whenever the socket is ready, the outbox sends them in the order they were written, and resends anything unacked after a reconnect. Offline messages stay `sending` (shown as "Queued") and go out automatically when the connection returns, even after a reload. Transient server errors are retried up to 5 times, 5s apart. Permanent rejections (`invalid_message`, `not_a_member`, `duplicate_client_msg_id`) mark the message `failed`.
+2. **Outbox**: each send is written to IndexedDB with status `sending`, and those messages *are* the outbox. Whenever the socket is ready, the outbox sends them in the order they were written, and resends anything unacked after a reconnect. Offline messages stay `sending` (shown as "Queued") and go out automatically when the connection returns, even after a reload. Transient server errors are retried up to 5 times, 5s apart. Permanent rejections (`invalid_message`, `not_a_member`, `duplicate_client_msg_id`) mark the message `failed`. With several tabs open, only one sends: tabs compete for a per-user Web Lock, and the holder watches the shared DB (Dexie live query) so it also sends messages written in other tabs. When it closes, another tab takes over. If a sent message gets no ack within 15s while the socket looks online, the client assumes the connection died silently and reconnects, which resends everything unacked.
 3. **Server `seq` per conversation**: inside one transaction, the server bumps `conversations.last_seq` and assigns the new value to the message. `seq` sets the order and serves as the sync cursor.
 4. **Receipts as watermarks**: the recipient's client sends `receipt.delivered {seq}` when messages from the peer arrive (live or via history), and `receipt.read {seq}` while the conversation is open and the tab is visible. The server clamps `seq` to the conversation's `last_seq`, only moves watermarks forward (read implies delivered), and broadcasts `receipt.update` only when something changed. Clients keep just the highest seq per conversation and resend it after a reconnect.
 5. **Status derivation (client side)**:

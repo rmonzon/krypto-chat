@@ -42,6 +42,19 @@ export class ChatSocket {
     this.setStatus('offline')
   }
 
+  /** Drops the current connection and reconnects right away, e.g. when acks stop arriving. */
+  reconnect() {
+    if (this.stopped) return
+    const ws = this.ws
+    this.ws = null
+    this.ready = false
+    ws?.close()
+    clearTimeout(this.retryTimer)
+    this.setStatus('offline')
+    this.attempt = 0
+    this.connect()
+  }
+
   /** Returns false if the socket isn't ready; the caller decides what to do. */
   send(event: ClientEvent): boolean {
     if (!this.ready || !this.ws) return false

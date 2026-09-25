@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { AuthScreen } from './auth/AuthScreen'
 import { ChatHome } from './conversations/ChatHome'
 import { api, ApiError } from './lib/api'
-import { getChatDb } from './lib/db'
+import { deleteChatDb, getChatDb } from './lib/db'
 import { supabase } from './lib/supabase'
 import type { Profile } from './lib/types'
 import { ProfileSetup } from './profile/ProfileSetup'
@@ -17,6 +17,18 @@ export default function App() {
     const { data } = supabase.auth.onAuthStateChange((_event, session) => setSession(session))
     return () => data.subscription.unsubscribe()
   }, [])
+
+  // After a sign-out (in this tab or another), delete that user's local data.
+  // This runs after the chat UI has unmounted, so nothing is still using the DB.
+  const lastUserId = useRef<string | null>(null)
+  useEffect(() => {
+    if (session) {
+      lastUserId.current = session.user.id
+    } else if (session === null && lastUserId.current) {
+      void deleteChatDb(lastUserId.current)
+      lastUserId.current = null
+    }
+  }, [session])
 
   if (session === undefined) return null
   if (!session) return <AuthScreen />

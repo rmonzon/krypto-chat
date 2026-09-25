@@ -1,14 +1,25 @@
-import { describe, expect, it, vi } from 'vitest'
-import { fakeSocket, freshDb, pendingMessage } from '../test/fakes'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { fakeLocks, fakeSocket, freshDb, pendingMessage } from '../test/fakes'
 import { Outbox } from './outbox'
+
+const started: Outbox[] = []
+afterEach(() => {
+  for (const outbox of started.splice(0)) outbox.stop()
+})
 
 function setup(status: 'online' | 'offline' = 'online') {
   const db = freshDb()
   const socket = fakeSocket(status)
-  const outbox = new Outbox(db, socket, 'me')
+  let time = 0
+  const outbox = new Outbox(db, socket, 'me', { locks: null, now: () => time })
+  outbox.start()
+  started.push(outbox)
+  const advance = (ms: number) => {
+    time += ms
+  }
   const statusOf = async (id: string) => (await db.messages.get(['me', id]))?.status
   const sentIds = () => socket.sent.map((e) => (e.type === 'message.send' ? e.client_msg_id : e.type))
-  return { db, socket, outbox, statusOf, sentIds }
+  return { db, socket, outbox, statusOf, sentIds, advance }
 }
 
 function ack(clientMsgId: string, seq: number) {
@@ -125,5 +136,71 @@ describe('Outbox', () => {
     await db.messages.put(pendingMessage({ sender_id: 'someone-else' }))
     await outbox.flush()
     expect(socket.sent).toHaveLength(0)
+  })
+
+  it('reconnects when a sent message goes unacked for 15s', async () => {
+    const { outbox, socket, advance } = setup()
+    await outbox.enqueue(pendingMessage())
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+
+    advance(14_000)
+    outbox.checkStalled()
+    expect(socket.reconnects).toBe(0)
+
+    advance(2_000)
+    outbox.checkStalled()
+    expect(socket.reconnects).toBe(1)
+  })
+
+  it('does not count acked messages as stalled', async () => {
+    const { outbox, socket, advance } = setup()
+    const m = pendingMessage()
+    await outbox.enqueue(m)
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    await outbox.onAck(ack(m.client_msg_id, 1))
+
+    advance(60_000)
+    outbox.checkStalled()
+    expect(socket.reconnects).toBe(0)
+  })
+})
+
+describe('Outbox across tabs', () => {
+  function tab(db: ReturnType<typeof freshDb>, locks: ReturnType<typeof fakeLocks>) {
+    const socket = fakeSocket()
+    const outbox = new Outbox(db, socket, 'me', { locks })
+    outbox.start()
+    started.push(outbox)
+    return { socket, outbox }
+  }
+
+  it("lets only the lock holder send, including other tabs' messages", async () => {
+    const db = freshDb()
+    const locks = fakeLocks()
+    const leader = tab(db, locks)
+    const follower = tab(db, locks)
+
+    // Written by the follower tab; picked up by the leader through the shared DB.
+    const m = pendingMessage()
+    await follower.outbox.enqueue(m)
+
+    await vi.waitFor(() => expect(leader.socket.sent).toHaveLength(1))
+    expect(follower.socket.sent).toHaveLength(0)
+  })
+
+  it('hands over to another tab when the leader stops', async () => {
+    const db = freshDb()
+    const locks = fakeLocks()
+    const leader = tab(db, locks)
+    const follower = tab(db, locks)
+    const m = pendingMessage()
+    await leader.outbox.enqueue(m)
+    await vi.waitFor(() => expect(leader.socket.sent).toHaveLength(1))
+
+    leader.outbox.stop() // tab closed before the ack arrived
+
+    // The unacked message is resent by the new leader (the server dedupes it).
+    await vi.waitFor(() => expect(follower.socket.sent).toHaveLength(1))
+    expect(follower.socket.sent[0]).toMatchObject({ client_msg_id: m.client_msg_id })
   })
 })

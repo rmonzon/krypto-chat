@@ -107,11 +107,13 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
           break
       }
     })
+    outbox.start()
     socket.start()
     return () => {
       offStatus()
       offEvent()
       socket.stop()
+      outbox.stop()
     }
   }, [socket, outbox, receipts, syncer, db, profile.id, touchConversation])
 
@@ -178,6 +180,17 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
 
   const selected = conversations?.find((c) => c.id === selectedId)
 
+  // Messages that would be lost by signing out (App deletes the local DB).
+  const unsentCount =
+    useLiveQuery(() => db.messages.where('status').anyOf('sending', 'failed').count(), [db]) ?? 0
+  const [confirmingSignOut, setConfirmingSignOut] = useState(false)
+
+  async function signOut() {
+    const { error } = await supabase.auth.signOut()
+    // Offline, the global sign-out can't reach Supabase; still end the session here.
+    if (error) await supabase.auth.signOut({ scope: 'local' })
+  }
+
   return (
     <div className="chat">
       <aside className="stack">
@@ -186,10 +199,30 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
             <strong>{profile.display_name}</strong>{' '}
             <span className="muted">@{profile.username}</span>
           </span>
-          <button type="button" className="link" onClick={() => supabase.auth.signOut()}>
+          <button
+            type="button"
+            className="link"
+            onClick={() => (unsentCount > 0 ? setConfirmingSignOut(true) : void signOut())}
+          >
             Sign out
           </button>
         </header>
+        {confirmingSignOut && (
+          <div className="confirm" role="alertdialog" aria-label="Confirm sign out">
+            <p>
+              {unsentCount === 1 ? '1 message hasn’t' : `${unsentCount} messages haven’t`} been sent
+              yet. Signing out deletes them from this device.
+            </p>
+            <div className="row">
+              <button type="button" onClick={() => void signOut()}>
+                Sign out anyway
+              </button>
+              <button type="button" onClick={() => setConfirmingSignOut(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         <p className={`connection ${connection}`}>{statusText[connection]}</p>
         <UserSearch onSelect={openConversationWith} />
         {error && <p className="error">{error}</p>}

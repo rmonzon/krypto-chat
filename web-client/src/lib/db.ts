@@ -28,6 +28,13 @@ export function getChatDb(userId: string): ChatDb {
   return db
 }
 
+/** Deletes the user's local database (on sign-out). */
+export async function deleteChatDb(userId: string) {
+  const db = dbs.get(userId) ?? getChatDb(userId)
+  dbs.delete(userId)
+  await db.delete()
+}
+
 export function fromServer({ id: _id, ...m }: ServerMessage): Message {
   return { ...m, status: 'sent' }
 }

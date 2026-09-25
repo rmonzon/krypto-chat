@@ -1,3 +1,4 @@
+import { liveQuery } from 'dexie'
 import type { ChatDb } from './db'
 import type { ChatSocket } from './socket'
 import type { Message, ServerEvent } from './types'
@@ -6,28 +7,90 @@ import type { Message, ServerEvent } from './types'
 const PERMANENT_ERRORS = new Set(['invalid_message', 'not_a_member', 'duplicate_client_msg_id'])
 const MAX_ATTEMPTS = 5
 const RETRY_DELAY_MS = 5_000
+// No ack this long after sending, while "online", means the connection is
+// probably dead without the browser noticing yet.
+const ACK_TIMEOUT_MS = 15_000
+const STALL_CHECK_MS = 5_000
 
 type Ack = Extract<ServerEvent, { type: 'message.ack' }>
 type ErrorEvent = Extract<ServerEvent, { type: 'error' }>
+type Locks = Pick<LockManager, 'request'>
+
+export type OutboxOptions = {
+  /** Web Locks, to elect one sending tab per user. null: this tab always sends. */
+  locks?: Locks | null
+  now?: () => number
+}
+
+const defaultLocks = (): Locks | null =>
+  typeof navigator !== 'undefined' && navigator.locks ? navigator.locks : null
 
 /**
  * Sends the user's pending messages (status 'sending' in the local DB), in
  * the order they were written, whenever the socket is online. Messages
  * survive reloads and offline periods; resending is safe because the
  * server dedupes on client_msg_id.
+ *
+ * With several tabs open, only the tab holding the outbox lock sends. It
+ * watches the shared DB, so messages written in other tabs go out too, and
+ * another tab takes over when it closes.
  */
 export class Outbox {
   private readonly db: ChatDb
   private readonly socket: ChatSocket
   private readonly userId: string
-  // Sent on the current connection and awaiting an ack or error.
-  private readonly inFlight = new Set<string>()
+  private readonly locks: Locks | null
+  private readonly now: () => number
+  // Sent on the current connection and awaiting an ack or error → when sent.
+  private readonly inFlight = new Map<string, number>()
+  private started = false
+  private leader = false
+  private stopLeading: (() => void) | undefined
+  private pendingWatch: { unsubscribe(): void } | undefined
+  private stallTimer: ReturnType<typeof setInterval> | undefined
   private retryTimer: ReturnType<typeof setTimeout> | undefined
 
-  constructor(db: ChatDb, socket: ChatSocket, userId: string) {
+  constructor(db: ChatDb, socket: ChatSocket, userId: string, options: OutboxOptions = {}) {
     this.db = db
     this.socket = socket
     this.userId = userId
+    this.locks = options.locks === undefined ? defaultLocks() : options.locks
+    this.now = options.now ?? Date.now
+  }
+
+  start() {
+    if (this.started) return
+    this.started = true
+    if (!this.locks) return this.becomeLeader()
+
+    const abort = new AbortController()
+    let release: (() => void) | undefined
+    this.stopLeading = () => {
+      abort.abort()
+      release?.()
+    }
+    this.locks
+      .request(`krypto-chat-outbox:${this.userId}`, { signal: abort.signal }, () => {
+        // Hold the lock until stop() (or the tab closes).
+        return new Promise<void>((resolve) => {
+          release = resolve
+          if (this.started) this.becomeLeader()
+          else resolve()
+        })
+      })
+      .catch(() => {}) // aborted while waiting for the lock
+  }
+
+  stop() {
+    this.started = false
+    this.leader = false
+    this.stopLeading?.()
+    this.stopLeading = undefined
+    this.pendingWatch?.unsubscribe()
+    this.pendingWatch = undefined
+    clearInterval(this.stallTimer)
+    clearTimeout(this.retryTimer)
+    this.inFlight.clear()
   }
 
   async enqueue(message: Message) {
@@ -76,7 +139,7 @@ export class Outbox {
   }
 
   async flush() {
-    if (this.socket.status !== 'online') return
+    if (!this.leader || this.socket.status !== 'online') return
     const pending = await this.db.messages
       .where('status')
       .equals('sending')
@@ -95,8 +158,29 @@ export class Outbox {
         body: m.body,
       })
       if (!sent) return // went offline; onOnline will pick up from here
-      this.inFlight.add(m.client_msg_id)
+      this.inFlight.set(m.client_msg_id, this.now())
     }
+  }
+
+  /** Reconnects if any sent message has gone unacked for too long. */
+  checkStalled() {
+    if (this.socket.status !== 'online') return
+    const cutoff = this.now() - ACK_TIMEOUT_MS
+    for (const sentAt of this.inFlight.values()) {
+      if (sentAt < cutoff) {
+        this.socket.reconnect() // onOnline then resends everything unacked
+        return
+      }
+    }
+  }
+
+  private becomeLeader() {
+    this.leader = true
+    // Fires now and whenever any tab adds or changes a pending message.
+    this.pendingWatch = liveQuery(() =>
+      this.db.messages.where('status').equals('sending').primaryKeys(),
+    ).subscribe({ next: () => void this.flush(), error: () => {} })
+    this.stallTimer = setInterval(() => this.checkStalled(), STALL_CHECK_MS)
   }
 
   private scheduleRetry() {

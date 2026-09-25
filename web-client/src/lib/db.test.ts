@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { freshDb, pendingMessage, serverMessage } from '../test/fakes'
-import { advanceCursor, compareConversations, compareMessages, fromServer } from './db'
+import {
+  advanceCursor,
+  compareConversations,
+  compareMessages,
+  deleteChatDb,
+  fromServer,
+  getChatDb,
+} from './db'
 import type { Conversation } from './types'
 
 describe('advanceCursor', () => {
@@ -65,5 +72,14 @@ describe('fromServer', () => {
     const local = fromServer(m)
     expect(local).not.toHaveProperty('id')
     expect(local).toMatchObject({ seq: 3, status: 'sent', client_msg_id: m.client_msg_id })
+  })
+})
+
+describe('deleteChatDb', () => {
+  it("removes the user's local data", async () => {
+    const userId = `test-${crypto.randomUUID()}`
+    await getChatDb(userId).messages.put(pendingMessage())
+    await deleteChatDb(userId)
+    expect(await getChatDb(userId).messages.count()).toBe(0)
   })
 })

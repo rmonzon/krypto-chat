@@ -209,3 +209,20 @@ button.status.failed {
 .history-edge button.link {
   margin-top: 0;
 }
+
+.confirm {
+  padding: 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #d90 15%, transparent);
+  font-size: 0.9rem;
+}
+
+.confirm p {
+  margin: 0 0 8px;
+}
+
+.confirm .row {
+  justify-content: flex-start;
+  gap: 8px;
+  margin: 0;
+}
