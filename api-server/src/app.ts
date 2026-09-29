@@ -3,6 +3,7 @@ import { requireAuth } from "./auth.js";
 import { pool } from "./db.js";
 import { registerRealtime } from "./realtime/index.js";
 import { conversationRoutes } from "./routes/conversations.js";
+import { inviteRoutes } from "./routes/invites.js";
 import { profileRoutes } from "./routes/profiles.js";
 import { syncRoutes } from "./routes/sync.js";
 import { userRoutes } from "./routes/users.js";
@@ -28,6 +29,7 @@ export async function buildApp({ logger = true }: { logger?: boolean } = {}) {
     await authed.register(profileRoutes);
     await authed.register(userRoutes);
     await authed.register(conversationRoutes);
+    await authed.register(inviteRoutes);
     await authed.register(syncRoutes);
   });
 

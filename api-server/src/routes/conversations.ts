@@ -1,5 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { getConversationForUser, listConversations } from "../conversations/service.js";
+import {
+  getConversationForUser,
+  getOrCreateDirectConversation,
+  listConversations,
+} from "../conversations/service.js";
 import { pool, withTransaction } from "../db.js";
 import { listMessages } from "../messages/service.js";
 import { notifyUser } from "../realtime/index.js";
@@ -35,30 +39,9 @@ export async function conversationRoutes(app: FastifyInstance) {
       if (!ids.has(me)) return reply.code(403).send({ error: "profile_required" });
       if (!ids.has(peer)) return reply.code(404).send({ error: "user_not_found" });
 
-      const directKey = [me, peer].sort().join(":");
-      const { id, created } = await withTransaction(async (client) => {
-        // On a concurrent create, the conflict check waits for the other
-        // transaction, so the fallback select below sees its committed row.
-        const inserted = await client.query<{ id: string }>(
-          `insert into conversations (direct_key) values ($1)
-           on conflict (direct_key) do nothing
-           returning id`,
-          [directKey],
-        );
-        if (inserted.rows[0]) {
-          const id = inserted.rows[0].id;
-          await client.query(
-            "insert into conversation_members (conversation_id, user_id) values ($1, $2), ($1, $3)",
-            [id, me, peer],
-          );
-          return { id, created: true };
-        }
-        const existing = await client.query<{ id: string }>(
-          "select id from conversations where direct_key = $1",
-          [directKey],
-        );
-        return { id: existing.rows[0]!.id, created: false };
-      });
+      const { id, created } = await withTransaction((client) =>
+        getOrCreateDirectConversation(client, me, peer),
+      );
 
       if (created) {
         // Let the peer's open clients show the new conversation right away.

@@ -30,10 +30,16 @@ export default function App() {
     }
   }, [session])
 
-  if (session === undefined) return null
-  if (!session) return <AuthScreen />
-  // Keyed by user so switching accounts resets profile state.
-  return <SignedIn key={session.user.id} userId={session.user.id} />
+  return (
+    <div className="app-shell">
+      {session === undefined ? null : !session ? (
+        <AuthScreen />
+      ) : (
+        // Keyed by user so switching accounts resets profile state.
+        <SignedIn key={session.user.id} userId={session.user.id} />
+      )}
+    </div>
+  )
 }
 
 function SignedIn({ userId }: { userId: string }) {

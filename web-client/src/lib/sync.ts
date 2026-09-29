@@ -1,5 +1,5 @@
 import { api } from './api'
-import { advanceCursor, fromServer, type ChatDb } from './db'
+import { advanceCursor, fromServer, putConversations, type ChatDb } from './db'
 import type { Receipts } from './receipts'
 import type { ServerMessage, SyncResponse } from './types'
 
@@ -53,7 +53,7 @@ export class Syncer {
         body: JSON.stringify({ cursors }),
       })
       await this.db.transaction('rw', this.db.conversations, this.db.messages, async () => {
-        await this.db.conversations.bulkPut(res.conversations)
+        await putConversations(this.db, res.conversations)
         await this.db.messages.bulkPut(res.messages.map(fromServer))
       })
 

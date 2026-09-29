@@ -1,6 +1,6 @@
 import { getChatDb } from '../lib/db'
 import type { ChatSocket, ConnectionStatus } from '../lib/socket'
-import type { ClientEvent, Message, ServerMessage } from '../lib/types'
+import type { ClientEvent, Conversation, Message, ServerMessage } from '../lib/types'
 
 /** A fresh local database per test. */
 export function freshDb() {
@@ -90,4 +90,18 @@ export function fakeLocks(): Pick<LockManager, 'request'> {
     })
   }
   return { request: request as LockManager['request'] }
+}
+
+export function conversation(overrides: Partial<Conversation> = {}): Conversation {
+  return {
+    id: 'conv-1',
+    peer: { id: 'peer', username: 'peer', display_name: 'Peer' },
+    last_seq: 0,
+    created_at: '2026-01-01T00:00:00.000Z',
+    last_message_at: null,
+    peer_delivered_up_to_seq: 0,
+    peer_read_up_to_seq: 0,
+    my_read_up_to_seq: 0,
+    ...overrides,
+  }
 }

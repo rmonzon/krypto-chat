@@ -20,4 +20,6 @@ export type ServerEvent =
       delivered_up_to_seq: number;
       read_up_to_seq: number;
     }
+  | { type: "invite.redeemed"; code: string; conversation: ConversationDto }
+  | { type: "typing"; conversation_id: string; user_id: string; typing: boolean }
   | { type: "error"; reason: string; client_msg_id?: string };

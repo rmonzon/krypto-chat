@@ -1,24 +1,37 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { api } from '../lib/api'
-import { advanceCursor, compareConversations, fromServer, type ChatDb } from '../lib/db'
+import {
+  advanceCursor,
+  advanceMyRead,
+  compareConversations,
+  fromServer,
+  putConversations,
+  type ChatDb,
+} from '../lib/db'
 import { loadOlderMessages } from '../lib/history'
 import { Outbox } from '../lib/outbox'
 import { Receipts } from '../lib/receipts'
 import { ChatSocket, type ConnectionStatus } from '../lib/socket'
 import { Syncer } from '../lib/sync'
+import { TypingSender, TypingTracker } from '../lib/typing'
 import { supabase } from '../lib/supabase'
+import { Brand } from '../ui/Brand'
+import { Clock } from '../ui/Clock'
+import { Icon } from '../ui/Icon'
 import type { Conversation, Message, Profile, ServerMessage } from '../lib/types'
+import { AddPeerScreen } from '../invites/AddPeerScreen'
 import { UserSearch } from '../users/UserSearch'
+import { ComposeScreen, type Recipient } from './ComposeScreen'
 import { ConversationList } from './ConversationList'
 import { ConversationView } from './ConversationView'
 
 const getToken = async () => (await supabase.auth.getSession()).data.session?.access_token ?? null
 
 const statusText: Record<ConnectionStatus, string> = {
-  connecting: 'Connecting…',
-  online: 'Online',
-  offline: 'Offline',
+  connecting: 'connecting…',
+  online: 'online',
+  offline: 'offline',
 }
 
 export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
@@ -26,8 +39,14 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
   const [outbox] = useState(() => new Outbox(db, socket, profile.id))
   const [receipts] = useState(() => new Receipts(socket))
   const [syncer] = useState(() => new Syncer(db, profile.id, receipts))
+  const [typingSender] = useState(() => new TypingSender(socket))
+  const [typingTracker] = useState(() => new TypingTracker())
+  // Conversations where the peer is typing right now.
+  const [peerTyping, setPeerTyping] = useState<ReadonlySet<string>>(() => typingTracker.current())
   const [connection, setConnection] = useState<ConnectionStatus>(socket.status)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // What the main pane shows besides a conversation.
+  const [pane, setPane] = useState<'chat' | 'compose' | 'addpeer'>('chat')
   // Conversations whose latest history page was fetched this session.
   const [loaded, setLoaded] = useState<Record<string, boolean>>({})
   const [error, setError] = useState<string | null>(null)
@@ -40,7 +59,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
   const loadConversations = useCallback(async () => {
     try {
       const { conversations } = await api<{ conversations: Conversation[] }>('/conversations')
-      await db.conversations.bulkPut(conversations)
+      await putConversations(db, conversations)
     } catch {
       // Offline: the cached list is still shown.
     }
@@ -61,6 +80,11 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
   useEffect(() => {
     const offStatus = socket.onStatus((status) => {
       setConnection(status)
+      if (status !== 'online') {
+        // Stops can't arrive (or be sent) while disconnected.
+        typingTracker.clearAll()
+        typingSender.reset()
+      }
       if (status === 'online') {
         // Resend what we owe the server, then catch up on what we missed.
         outbox.onOnline()
@@ -78,17 +102,25 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
         case 'message.new': {
           const { message } = event
           await db.messages.put(fromServer(message))
+          // Their message is here, so they've stopped typing it.
+          if (message.sender_id !== profile.id) typingTracker.update(message.conversation_id, false)
           await advanceCursor(db, message.conversation_id, message.seq, message.seq)
           await touchConversation(message.conversation_id, message.created_at)
           if (message.sender_id !== profile.id) receipts.markDelivered(message.conversation_id, message.seq)
           break
         }
+        case 'invite.redeemed':
+          // Someone redeemed our invite; the Add peer screen reacts to it too.
+          await putConversations(db, [event.conversation])
+          break
         case 'conversation.new':
-          await db.conversations.put(event.conversation)
+          await putConversations(db, [event.conversation])
           break
         case 'receipt.update':
-          // Our own receipts (from other tabs) don't change any message status.
-          if (event.user_id !== profile.id) {
+          if (event.user_id === profile.id) {
+            // Read in another tab: clear the unread count here too.
+            await advanceMyRead(db, event.conversation_id, event.read_up_to_seq)
+          } else {
             await db.conversations
               .where('id')
               .equals(event.conversation_id)
@@ -102,20 +134,42 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
               })
           }
           break
+        case 'typing':
+          if (event.user_id !== profile.id) typingTracker.update(event.conversation_id, event.typing)
+          break
         case 'error':
           await outbox.onError(event)
           break
       }
     })
+    const offTyping = typingTracker.subscribe(setPeerTyping)
     outbox.start()
     socket.start()
     return () => {
       offStatus()
       offEvent()
+      offTyping()
+      typingTracker.clearAll()
       socket.stop()
       outbox.stop()
     }
-  }, [socket, outbox, receipts, syncer, db, profile.id, touchConversation])
+  }, [
+    socket,
+    outbox,
+    receipts,
+    syncer,
+    typingSender,
+    typingTracker,
+    db,
+    profile.id,
+    touchConversation,
+  ])
+
+  // Leaving a conversation (or signing out) stops any "typing" we announced there.
+  useEffect(() => {
+    if (!selectedId) return
+    return () => typingSender.stop(selectedId)
+  }, [selectedId, typingSender])
 
   // Fetch the latest page of history the first time a conversation is opened
   // this session. Cached messages show immediately in the meantime.
@@ -135,21 +189,45 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
       .catch(() => setError('Could not load messages. Showing cached history.'))
   }, [selectedId, loaded, db, profile.id, receipts])
 
+  function openConversation(id: string) {
+    setError(null)
+    setPane('chat')
+    setSelectedId(id)
+  }
+
+  function showPane(next: 'compose' | 'addpeer') {
+    setError(null)
+    setSelectedId(null)
+    setPane(next)
+  }
+
+  /** Returns the existing 1:1 conversation with user, or creates it. */
+  async function startConversation(user: Profile) {
+    const conversation = await api<Conversation>('/conversations', {
+      method: 'POST',
+      body: JSON.stringify({ peer_id: user.id }),
+    })
+    await putConversations(db, [conversation])
+    return conversation
+  }
+
   async function openConversationWith(user: Profile) {
     setError(null)
     try {
-      const conversation = await api<Conversation>('/conversations', {
-        method: 'POST',
-        body: JSON.stringify({ peer_id: user.id }),
-      })
-      await db.conversations.put(conversation)
-      setSelectedId(conversation.id)
+      openConversation((await startConversation(user)).id)
     } catch {
       setError(`Could not start a conversation with @${user.username}.`)
     }
   }
 
+  async function sendFromCompose(to: Recipient, body: string) {
+    const conversationId = 'peer' in to ? to.id : (await startConversation(to)).id
+    await sendMessage(conversationId, body)
+    openConversation(conversationId)
+  }
+
   async function sendMessage(conversationId: string, body: string) {
+    typingSender.stop(conversationId)
     const now = new Date().toISOString()
     const message: Message = {
       client_msg_id: crypto.randomUUID(),
@@ -167,9 +245,11 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
 
   const markRead = useCallback(
     (seq: number) => {
-      if (selectedId) receipts.markRead(selectedId, seq)
+      if (!selectedId) return
+      receipts.markRead(selectedId, seq)
+      void advanceMyRead(db, selectedId, seq)
     },
-    [receipts, selectedId],
+    [db, receipts, selectedId],
   )
 
   const loadOlder = useCallback(
@@ -184,6 +264,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
   const unsentCount =
     useLiveQuery(() => db.messages.where('status').anyOf('sending', 'failed').count(), [db]) ?? 0
   const [confirmingSignOut, setConfirmingSignOut] = useState(false)
+  const [query, setQuery] = useState('')
 
   async function signOut() {
     const { error } = await supabase.auth.signOut()
@@ -191,53 +272,141 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
     if (error) await supabase.auth.signOut({ scope: 'local' })
   }
 
+  const peerIds = new Set([profile.id, ...(conversations ?? []).map((c) => c.peer.id)])
+
   return (
-    <div className="chat">
-      <aside className="stack">
-        <header className="row">
-          <span>
-            <strong>{profile.display_name}</strong>{' '}
-            <span className="muted">@{profile.username}</span>
-          </span>
-          <button
-            type="button"
-            className="link"
-            onClick={() => (unsentCount > 0 ? setConfirmingSignOut(true) : void signOut())}
-          >
-            Sign out
-          </button>
-        </header>
-        {confirmingSignOut && (
-          <div className="confirm" role="alertdialog" aria-label="Confirm sign out">
-            <p>
-              {unsentCount === 1 ? '1 message hasn’t' : `${unsentCount} messages haven’t`} been sent
-              yet. Signing out deletes them from this device.
-            </p>
-            <div className="row">
-              <button type="button" onClick={() => void signOut()}>
-                Sign out anyway
+    <div className={'app-main' + (selected || pane !== 'chat' ? ' has-selection' : '')}>
+      <aside className="sidebar">
+        <div className="screen inbox">
+          <header className="topbar">
+            <Brand />
+            <div className="topbar-actions">
+              <button
+                type="button"
+                className="icon-btn"
+                title="Add peer with an invite code"
+                aria-label="Add peer"
+                aria-pressed={pane === 'addpeer'}
+                onClick={() => showPane('addpeer')}
+              >
+                <Icon name="userPlus" size={18} />
               </button>
-              <button type="button" onClick={() => setConfirmingSignOut(false)}>
-                Cancel
+              <button
+                type="button"
+                className="icon-btn accent"
+                title="New message"
+                aria-label="New message"
+                aria-pressed={pane === 'compose'}
+                onClick={() => showPane('compose')}
+              >
+                <Icon name="plus" size={18} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                title="Sign out"
+                aria-label="Sign out"
+                onClick={() => (unsentCount > 0 ? setConfirmingSignOut(true) : void signOut())}
+              >
+                <Icon name="logout" size={18} />
               </button>
             </div>
+          </header>
+
+          <div className="session-strip">
+            <span className="ss-id" title={`${profile.display_name} · ${statusText[connection]}`}>
+              <span
+                className={`dot ${connection === 'online' ? 'live' : connection}`}
+                role="img"
+                aria-label={statusText[connection]}
+              />
+              {'@' + profile.username}
+            </span>
+            <span className="ss-sep" />
+            <span>
+              <Icon name="signal" size={12} /> {conversations?.length ?? 0}{' '}
+              {conversations?.length === 1 ? 'peer' : 'peers'}
+            </span>
+            {connection !== 'online' && (
+              <span className={`ss-status ${connection}`}>{statusText[connection]}</span>
+            )}
+            <span className="ss-grow" />
+            <Clock className="ss-clock" />
           </div>
-        )}
-        <p className={`connection ${connection}`}>{statusText[connection]}</p>
-        <UserSearch onSelect={openConversationWith} />
-        {error && <p className="error">{error}</p>}
-        <h2>Conversations</h2>
-        <ConversationList
-          conversations={conversations ?? []}
-          selectedId={selectedId}
-          onSelect={(id) => {
-            setError(null)
-            setSelectedId(id)
-          }}
-        />
+
+          {confirmingSignOut && (
+            <div className="confirm-panel" role="alertdialog" aria-label="Confirm sign out">
+              <p>
+                <Icon name="alert" size={14} />
+                {unsentCount === 1 ? '1 message hasn’t' : `${unsentCount} messages haven’t`} been
+                sent yet. Signing out deletes them from this device.
+              </p>
+              <div className="confirm-actions">
+                <button type="button" className="ghost-btn danger" onClick={() => void signOut()}>
+                  sign out anyway
+                </button>
+                <button type="button" className="ghost-btn" onClick={() => setConfirmingSignOut(false)}>
+                  cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          <label className="search">
+            <Icon name="search" size={15} />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="search channels or users…"
+              aria-label="Search channels or users"
+              spellCheck={false}
+            />
+          </label>
+
+          {error && (
+            <p className="sidebar-error" role="alert">
+              {error}
+            </p>
+          )}
+
+          <div className="conv-list">
+            <ConversationList
+              db={db}
+              myId={profile.id}
+              conversations={conversations ?? []}
+              selectedId={selectedId}
+              query={query}
+              peerTyping={peerTyping}
+              onSelect={openConversation}
+            />
+            <UserSearch
+              query={query}
+              excludeIds={peerIds}
+              onSelect={(user) => {
+                setQuery('')
+                void openConversationWith(user)
+              }}
+            />
+          </div>
+        </div>
       </aside>
-      <main>
-        {selected ? (
+      <main className="main-pane">
+        {pane === 'compose' ? (
+          <ComposeScreen
+            myId={profile.id}
+            conversations={conversations ?? []}
+            onCancel={() => setPane('chat')}
+            onSend={sendFromCompose}
+          />
+        ) : pane === 'addpeer' ? (
+          <AddPeerScreen
+            socket={socket}
+            onBack={() => setPane('chat')}
+            onAdded={(conversation) => void putConversations(db, [conversation])}
+            onOpen={(conversation) => openConversation(conversation.id)}
+          />
+        ) : selected ? (
           <ConversationView
             key={selected.id}
             db={db}
@@ -245,15 +414,43 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
             loaded={loaded[selected.id] ?? false}
             online={connection === 'online'}
             myId={profile.id}
+            myUsername={profile.username}
+            onBack={() => setSelectedId(null)}
+            peerTyping={peerTyping.has(selected.id)}
+            onDraftChange={(draft) => typingSender.draftChanged(selected.id, draft)}
             onSend={(body) => void sendMessage(selected.id, body)}
             onRetry={(m) => void outbox.retry(m.client_msg_id)}
             onRead={markRead}
             onLoadOlder={loadOlder}
           />
         ) : (
-          <p className="muted">Select a conversation.</p>
+          <EmptyState />
         )}
       </main>
+    </div>
+  )
+}
+
+function EmptyState() {
+  return (
+    <div className="empty-state">
+      <span className="es-glyph" aria-hidden="true">
+        <svg
+          width="56"
+          height="56"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M12 2 4 5.5v6c0 4.6 3.2 7.6 8 8.9 4.8-1.3 8-4.3 8-8.9v-6L12 2Z" />
+          <path d="M9 11.5 11 13.5 15.5 9" />
+        </svg>
+      </span>
+      <h3>No channel selected</h3>
+      <p>Choose a channel from the left, or search for a username to open a new one.</p>
     </div>
   )
 }

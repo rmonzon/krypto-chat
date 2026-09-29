@@ -16,6 +16,7 @@ const conversation: Conversation = {
   peer: { id: 'peer', username: 'peer', display_name: 'Peer' },
   peer_delivered_up_to_seq: 1,
   peer_read_up_to_seq: 0,
+  my_read_up_to_seq: 0,
 }
 
 function setup() {

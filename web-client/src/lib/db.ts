@@ -53,6 +53,43 @@ export function compareConversations(a: Conversation, b: Conversation) {
 }
 
 /**
+ * Stores conversations from the server without moving read/delivery
+ * watermarks backwards: a snapshot fetched just before a receipt landed (or
+ * before we marked something read locally) must not undo that progress.
+ */
+export async function putConversations(db: ChatDb, incoming: Conversation[]) {
+  await db.transaction('rw', db.conversations, async () => {
+    const existing = await db.conversations.bulkGet(incoming.map((c) => c.id))
+    await db.conversations.bulkPut(
+      incoming.map((c, i) => {
+        const local = existing[i]
+        if (!local) return c
+        // ?? 0: conversations cached by older versions lack some watermarks.
+        return {
+          ...c,
+          peer_delivered_up_to_seq: Math.max(
+            c.peer_delivered_up_to_seq,
+            local.peer_delivered_up_to_seq ?? 0,
+          ),
+          peer_read_up_to_seq: Math.max(c.peer_read_up_to_seq, local.peer_read_up_to_seq ?? 0),
+          my_read_up_to_seq: Math.max(c.my_read_up_to_seq, local.my_read_up_to_seq ?? 0),
+        }
+      }),
+    )
+  })
+}
+
+/** Moves this user's read watermark forward (never back). */
+export async function advanceMyRead(db: ChatDb, conversationId: string, seq: number) {
+  await db.conversations
+    .where('id')
+    .equals(conversationId)
+    .modify((c) => {
+      c.my_read_up_to_seq = Math.max(c.my_read_up_to_seq ?? 0, seq)
+    })
+}
+
+/**
  * Records that messages from..to (a gap-free seq range) are stored locally.
  * The cursor only moves when the range connects to it, so a live message
  * can't jump it past messages missed while offline. With no cursor yet, a
