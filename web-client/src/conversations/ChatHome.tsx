@@ -21,12 +21,15 @@ import { Clock } from '../ui/Clock'
 import { Icon } from '../ui/Icon'
 import type { Conversation, Message, Profile, ServerMessage } from '../lib/types'
 import { AddPeerScreen } from '../invites/AddPeerScreen'
+import { IdentityScreen } from '../profile/IdentityScreen'
 import { UserSearch } from '../users/UserSearch'
 import { ComposeScreen, type Recipient } from './ComposeScreen'
 import { ConversationList } from './ConversationList'
 import { ConversationView } from './ConversationView'
 
 const getToken = async () => (await supabase.auth.getSession()).data.session?.access_token ?? null
+
+type Pane = 'chat' | 'compose' | 'addpeer' | 'identity'
 
 const statusText: Record<ConnectionStatus, string> = {
   connecting: 'connecting…',
@@ -46,7 +49,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
   const [connection, setConnection] = useState<ConnectionStatus>(socket.status)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // What the main pane shows besides a conversation.
-  const [pane, setPane] = useState<'chat' | 'compose' | 'addpeer'>('chat')
+  const [pane, setPane] = useState<Pane>('chat')
   // Conversations whose latest history page was fetched this session.
   const [loaded, setLoaded] = useState<Record<string, boolean>>({})
   const [error, setError] = useState<string | null>(null)
@@ -195,7 +198,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
     setSelectedId(id)
   }
 
-  function showPane(next: 'compose' | 'addpeer') {
+  function showPane(next: Exclude<Pane, 'chat'>) {
     setError(null)
     setSelectedId(null)
     setPane(next)
@@ -263,7 +266,6 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
   // Messages that would be lost by signing out (App deletes the local DB).
   const unsentCount =
     useLiveQuery(() => db.messages.where('status').anyOf('sending', 'failed').count(), [db]) ?? 0
-  const [confirmingSignOut, setConfirmingSignOut] = useState(false)
   const [query, setQuery] = useState('')
 
   async function signOut() {
@@ -304,11 +306,12 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
               <button
                 type="button"
                 className="icon-btn"
-                title="Sign out"
-                aria-label="Sign out"
-                onClick={() => (unsentCount > 0 ? setConfirmingSignOut(true) : void signOut())}
+                title="Identity & sign out"
+                aria-label="Identity"
+                aria-pressed={pane === 'identity'}
+                onClick={() => showPane('identity')}
               >
-                <Icon name="logout" size={18} />
+                <Icon name="fingerprint" size={18} />
               </button>
             </div>
           </header>
@@ -333,24 +336,6 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
             <span className="ss-grow" />
             <Clock className="ss-clock" />
           </div>
-
-          {confirmingSignOut && (
-            <div className="confirm-panel" role="alertdialog" aria-label="Confirm sign out">
-              <p>
-                <Icon name="alert" size={14} />
-                {unsentCount === 1 ? '1 message hasn’t' : `${unsentCount} messages haven’t`} been
-                sent yet. Signing out deletes them from this device.
-              </p>
-              <div className="confirm-actions">
-                <button type="button" className="ghost-btn danger" onClick={() => void signOut()}>
-                  sign out anyway
-                </button>
-                <button type="button" className="ghost-btn" onClick={() => setConfirmingSignOut(false)}>
-                  cancel
-                </button>
-              </div>
-            </div>
-          )}
 
           <label className="search">
             <Icon name="search" size={15} />
@@ -398,6 +383,16 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
             conversations={conversations ?? []}
             onCancel={() => setPane('chat')}
             onSend={sendFromCompose}
+          />
+        ) : pane === 'identity' ? (
+          <IdentityScreen
+            profile={profile}
+            conversations={conversations ?? []}
+            unsentCount={unsentCount}
+            onBack={() => setPane('chat')}
+            onAddPeer={() => showPane('addpeer')}
+            onOpen={openConversation}
+            onSignOut={() => void signOut()}
           />
         ) : pane === 'addpeer' ? (
           <AddPeerScreen

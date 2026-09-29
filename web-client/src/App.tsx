@@ -7,6 +7,7 @@ import { deleteChatDb, getChatDb } from './lib/db'
 import { supabase } from './lib/supabase'
 import type { Profile } from './lib/types'
 import { ProfileSetup } from './profile/ProfileSetup'
+import { Icon } from './ui/Icon'
 
 export default function App() {
   // undefined = still restoring the session from storage
@@ -77,7 +78,18 @@ function SignedIn({ userId }: { userId: string }) {
     void db.meta.put({ key: 'profile', value: created })
   }
 
-  if (error) return <main className="card error">Could not reach the server.</main>
+  if (error) {
+    return (
+      <main className="empty-state">
+        <Icon name="alert" size={40} className="es-alert" />
+        <h3>Can’t reach the server</h3>
+        <p>Your profile couldn’t be loaded. Check your connection and try again.</p>
+        <button type="button" className="ghost-btn" onClick={() => window.location.reload()}>
+          <Icon name="refresh" size={13} /> retry
+        </button>
+      </main>
+    )
+  }
   if (profile === undefined) return null
   if (profile === null) return <ProfileSetup onCreated={handleProfileCreated} />
 

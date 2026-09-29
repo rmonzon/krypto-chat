@@ -434,6 +434,20 @@ body {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--err) 50%, transparent);
 }
 
+.field-hint {
+  margin-top: -4px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.key-input .ki-at {
+  font-size: 15px;
+  font-weight: 700;
+  width: 16px;
+  text-align: center;
+}
+
 .lock-go {
   width: 100%;
   padding: 13px;
@@ -540,6 +554,14 @@ body {
   color: var(--textdim);
   font-weight: 600;
   text-transform: uppercase;
+}
+
+.app-shell > .empty-state {
+  height: 100%;
+}
+
+.empty-state .es-alert {
+  color: var(--err);
 }
 
 .empty-state p {
@@ -1422,6 +1444,162 @@ button.msg-status.failed:focus-visible {
 .kb-actions {
   display: flex;
   gap: 7px;
+}
+
+/* ================= IDENTITY ================= */
+.id-card {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 22px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.identicon {
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 5px;
+  box-sizing: content-box;
+  box-shadow: 0 0 22px color-mix(in srgb, var(--green) 14%, transparent);
+}
+
+.identicon rect {
+  fill: var(--green);
+  opacity: 0.85;
+}
+
+.id-right {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.id-handle {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.02em;
+  overflow-wrap: anywhere;
+}
+
+.id-user {
+  font-size: 13px;
+  color: var(--textdim);
+}
+
+.id-fp {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+  min-width: 0;
+}
+
+.id-fp .lbl {
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.fp-val {
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 520px) {
+  .id-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+.trusted {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.trusted-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.trusted-head h3 {
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0.16em;
+  color: var(--textdim);
+  text-transform: uppercase;
+}
+
+.trusted-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.trusted-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.trusted-row:last-child {
+  border-bottom: none;
+}
+
+.tr-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tr-handle {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.session-card .field-label {
+  margin: 0;
+  font-weight: 400;
+}
+
+.session-card .confirm-panel {
+  margin: 0;
+}
+
+.session-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
 }
 
 /* ================= ADD PEER ================= */
