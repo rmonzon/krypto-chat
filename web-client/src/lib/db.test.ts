@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { freshDb, pendingMessage, serverMessage } from '../test/fakes'
+import { conversation, freshDb, pendingMessage, serverMessage } from '../test/fakes'
 import {
   advanceCursor,
+  advanceMyRead,
   compareConversations,
   compareMessages,
   deleteChatDb,
   fromServer,
   getChatDb,
+  putConversations,
 } from './db'
 import type { Conversation } from './types'
 
@@ -45,6 +47,50 @@ describe('advanceCursor', () => {
   })
 })
 
+describe('putConversations', () => {
+  it('stores new conversations as given', async () => {
+    const db = freshDb()
+    await putConversations(db, [conversation({ my_read_up_to_seq: 4 })])
+    expect(await db.conversations.get('conv-1')).toEqual(conversation({ my_read_up_to_seq: 4 }))
+  })
+
+  it('takes fresh fields from the server but never moves watermarks backwards', async () => {
+    const db = freshDb()
+    await db.conversations.put(
+      conversation({ my_read_up_to_seq: 7, peer_delivered_up_to_seq: 5, peer_read_up_to_seq: 1 }),
+    )
+
+    // A snapshot fetched before the local progress landed.
+    await putConversations(db, [
+      conversation({
+        last_seq: 9,
+        my_read_up_to_seq: 3,
+        peer_delivered_up_to_seq: 2,
+        peer_read_up_to_seq: 2,
+      }),
+    ])
+
+    expect(await db.conversations.get('conv-1')).toMatchObject({
+      last_seq: 9,
+      my_read_up_to_seq: 7,
+      peer_delivered_up_to_seq: 5,
+      peer_read_up_to_seq: 2,
+    })
+  })
+})
+
+describe('advanceMyRead', () => {
+  it('only moves the read watermark forward', async () => {
+    const db = freshDb()
+    await db.conversations.put(conversation({ my_read_up_to_seq: 3 }))
+
+    await advanceMyRead(db, 'conv-1', 5)
+    await advanceMyRead(db, 'conv-1', 4)
+
+    expect((await db.conversations.get('conv-1'))?.my_read_up_to_seq).toBe(5)
+  })
+})
+
 describe('compareMessages', () => {
   it('orders acked messages by seq, then pending ones by creation time', () => {
     const pendingLater = pendingMessage({ created_at: '2026-01-01T00:00:02.000Z' })
@@ -58,7 +104,7 @@ describe('compareMessages', () => {
 
 describe('compareConversations', () => {
   it('puts the most recently active first, falling back to creation time', () => {
-    const base = { last_seq: 0, peer: { id: 'p', username: 'p', display_name: 'P' }, peer_delivered_up_to_seq: 0, peer_read_up_to_seq: 0 }
+    const base = { last_seq: 0, peer: { id: 'p', username: 'p', display_name: 'P' }, peer_delivered_up_to_seq: 0, peer_read_up_to_seq: 0, my_read_up_to_seq: 0 }
     const oldButActive: Conversation = { ...base, id: 'a', created_at: '2026-01-01T00:00:00Z', last_message_at: '2026-01-05T00:00:00Z' }
     const newQuiet: Conversation = { ...base, id: 'b', created_at: '2026-01-03T00:00:00Z', last_message_at: null }
     const oldQuiet: Conversation = { ...base, id: 'c', created_at: '2026-01-02T00:00:00Z', last_message_at: null }

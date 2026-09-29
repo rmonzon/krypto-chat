@@ -1,3 +1,4 @@
+import type pg from "pg";
 import { pool } from "../db.js";
 
 export type ConversationDto = {
@@ -9,6 +10,8 @@ export type ConversationDto = {
   /** How far the peer has received / read, as conversation seqs. */
   peer_delivered_up_to_seq: number;
   peer_read_up_to_seq: number;
+  /** How far the caller has read; messages after it from the peer are unread. */
+  my_read_up_to_seq: number;
 };
 
 type ConversationRow = {
@@ -21,6 +24,7 @@ type ConversationRow = {
   peer_display_name: string;
   peer_delivered_up_to_seq: string;
   peer_read_up_to_seq: string;
+  my_read_up_to_seq: string;
 };
 
 // Conversations as seen by one member: the other member is the "peer".
@@ -28,7 +32,8 @@ const selectConversations = `
   select c.id, c.last_seq, c.created_at, c.last_message_at,
          p.id as peer_id, p.username as peer_username, p.display_name as peer_display_name,
          other.delivered_up_to_seq as peer_delivered_up_to_seq,
-         other.read_up_to_seq as peer_read_up_to_seq
+         other.read_up_to_seq as peer_read_up_to_seq,
+         me.read_up_to_seq as my_read_up_to_seq
   from conversation_members me
   join conversations c on c.id = me.conversation_id
   join conversation_members other on other.conversation_id = c.id and other.user_id <> me.user_id
@@ -44,6 +49,7 @@ function toConversation(row: ConversationRow): ConversationDto {
     peer: { id: row.peer_id, username: row.peer_username, display_name: row.peer_display_name },
     peer_delivered_up_to_seq: Number(row.peer_delivered_up_to_seq),
     peer_read_up_to_seq: Number(row.peer_read_up_to_seq),
+    my_read_up_to_seq: Number(row.my_read_up_to_seq),
   };
 }
 
@@ -66,6 +72,48 @@ export async function getConversationForUser(
     conversationId,
   ]);
   return rows[0] && toConversation(rows[0]);
+}
+
+/**
+ * The 1:1 conversation between a and b, created if it doesn't exist yet.
+ * Run inside a transaction (see withTransaction).
+ */
+export async function getOrCreateDirectConversation(
+  client: pg.PoolClient,
+  a: string,
+  b: string,
+): Promise<{ id: string; created: boolean }> {
+  const directKey = [a, b].sort().join(":");
+  // On a concurrent create, the conflict check waits for the other
+  // transaction, so the fallback select below sees its committed row.
+  const inserted = await client.query<{ id: string }>(
+    `insert into conversations (direct_key) values ($1)
+     on conflict (direct_key) do nothing
+     returning id`,
+    [directKey],
+  );
+  if (inserted.rows[0]) {
+    const id = inserted.rows[0].id;
+    await client.query(
+      "insert into conversation_members (conversation_id, user_id) values ($1, $2), ($1, $3)",
+      [id, a, b],
+    );
+    return { id, created: true };
+  }
+  const existing = await client.query<{ id: string }>(
+    "select id from conversations where direct_key = $1",
+    [directKey],
+  );
+  return { id: existing.rows[0]!.id, created: false };
+}
+
+/** Everyone in the conversation (empty if it doesn't exist). */
+export async function conversationMemberIds(conversationId: string): Promise<string[]> {
+  const { rows } = await pool.query<{ user_id: string }>(
+    "select user_id from conversation_members where conversation_id = $1",
+    [conversationId],
+  );
+  return rows.map((r) => r.user_id);
 }
 
 export type ReceiptKind = "delivered" | "read";
@@ -104,12 +152,8 @@ export async function advanceReceipt(
   );
   if (!rows[0]) return undefined;
 
-  const members = await pool.query<{ user_id: string }>(
-    "select user_id from conversation_members where conversation_id = $1",
-    [conversationId],
-  );
   return {
-    memberIds: members.rows.map((r) => r.user_id),
+    memberIds: await conversationMemberIds(conversationId),
     delivered_up_to_seq: Number(rows[0].delivered_up_to_seq),
     read_up_to_seq: Number(rows[0].read_up_to_seq),
   };

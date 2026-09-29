@@ -13,6 +13,8 @@ export type Conversation = {
   /** How far the peer has received / read, as conversation seqs. */
   peer_delivered_up_to_seq: number
   peer_read_up_to_seq: number
+  /** How far this user has read; peer messages after it are unread. */
+  my_read_up_to_seq: number
 }
 
 /** A message as stored by the server. */
@@ -46,6 +48,7 @@ export type ClientEvent =
       body: string
     }
   | { type: 'receipt.delivered' | 'receipt.read'; conversation_id: string; seq: number }
+  | { type: 'typing'; conversation_id: string; typing: boolean }
 
 export type ServerEvent =
   | { type: 'ready'; user_id: string }
@@ -65,7 +68,11 @@ export type ServerEvent =
       delivered_up_to_seq: number
       read_up_to_seq: number
     }
+  | { type: 'invite.redeemed'; code: string; conversation: Conversation }
+  | { type: 'typing'; conversation_id: string; user_id: string; typing: boolean }
   | { type: 'error'; reason: string; client_msg_id?: string }
+
+export type Invite = { code: string; expires_at: string }
 
 export type SyncResponse = {
   conversations: Conversation[]

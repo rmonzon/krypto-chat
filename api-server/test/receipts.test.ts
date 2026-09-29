@@ -63,9 +63,25 @@ describe("receipts", () => {
     expect(res.body.conversations[0]).toMatchObject({
       peer_delivered_up_to_seq: 3,
       peer_read_up_to_seq: 1,
+      my_read_up_to_seq: 0,
     });
     aliceSocket.close();
     bobSocket.close();
+  });
+
+  it("exposes the caller's own read watermark, and echoes it to their other sockets", async () => {
+    const { bob, conversationId, aliceSocket, bobSocket } = await setupWithMessages(3);
+    const bobOtherTab = await TestSocket.connect(bob);
+
+    bobSocket.send({ type: "receipt.read", conversation_id: conversationId, seq: 2 });
+    expect(await bobOtherTab.next("receipt.update")).toMatchObject({
+      user_id: bob.id,
+      read_up_to_seq: 2,
+    });
+
+    const res = await request("GET", "/conversations", { token: bob.token });
+    expect(res.body.conversations[0]).toMatchObject({ my_read_up_to_seq: 2 });
+    for (const s of [aliceSocket, bobSocket, bobOtherTab]) s.close();
   });
 
   it("ignores receipts from non-members and rejects malformed ones", async () => {

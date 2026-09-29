@@ -1,9 +1,19 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import type { Profile } from '../lib/types'
+import { Avatar } from '../ui/Avatar'
+import { Icon } from '../ui/Icon'
 
-export function UserSearch({ onSelect }: { onSelect: (user: Profile) => void }) {
-  const [query, setQuery] = useState('')
+type Props = {
+  query: string
+  /** Users to leave out of the results, e.g. existing peers and yourself. */
+  excludeIds: Set<string>
+  heading?: string
+  onSelect: (user: Profile) => void
+}
+
+/** Server-side user search for starting new conversations. Renders nothing for an empty query. */
+export function UserSearch({ query, excludeIds, heading = 'New channel', onSelect }: Props) {
   const [results, setResults] = useState<Profile[]>([])
   const [error, setError] = useState(false)
 
@@ -31,35 +41,32 @@ export function UserSearch({ onSelect }: { onSelect: (user: Profile) => void }) 
     }
   }, [query])
 
-  const q = query.trim()
-  const visible = q ? results : []
+  if (!query.trim()) return null
+  const visible = results.filter((u) => !excludeIds.has(u.id))
 
   return (
-    <section className="stack">
-      <input
-        type="search"
-        placeholder="Search users by username"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
-      {error && <p className="error">Search failed.</p>}
-      <ul className="results">
-        {visible.map((user) => (
-          <li key={user.id}>
-            <button
-              type="button"
-              className="item"
-              onClick={() => {
-                onSelect(user)
-                setQuery('')
-              }}
-            >
-              <strong>{user.display_name}</strong> <span className="muted">@{user.username}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-      {q && !error && visible.length === 0 && <p className="muted">No users found.</p>}
+    <section className="user-search" aria-label={heading}>
+      <h2 className="list-heading">{heading}</h2>
+      {error ? (
+        <p className="list-note err">Search failed.</p>
+      ) : visible.length === 0 ? (
+        <p className="list-note">No other users found.</p>
+      ) : (
+        <ul className="conv-list-items">
+          {visible.map((user) => (
+            <li key={user.id}>
+              <button type="button" className="conv-row" onClick={() => onSelect(user)}>
+                <Avatar username={user.username} size={36} />
+                <div className="conv-main">
+                  <span className="conv-handle">{user.display_name}</span>
+                  <div className="conv-prev mono-dim">@{user.username}</div>
+                </div>
+                <Icon name="plus" size={15} className="row-action" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   )
 }

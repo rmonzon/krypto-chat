@@ -2,7 +2,11 @@ import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import websocket from "@fastify/websocket";
 import type { WebSocket } from "ws";
 import { verifyAccessToken } from "../auth.js";
-import { advanceReceipt, type ReceiptKind } from "../conversations/service.js";
+import {
+  advanceReceipt,
+  conversationMemberIds,
+  type ReceiptKind,
+} from "../conversations/service.js";
 import { sendMessage, type SendMessageInput } from "../messages/service.js";
 import { addConnection, notifyUser, removeConnection, sendEvent } from "./connections.js";
 
@@ -60,6 +64,27 @@ async function handleReceipt(
   }
 }
 
+/**
+ * Relays "typing" / "stopped typing" to the conversation's other members.
+ * Ephemeral: nothing is stored, and receivers expire it on their own in case
+ * the stop never arrives.
+ */
+async function handleTyping(userId: string, socket: WebSocket, event: Record<string, unknown>) {
+  const { conversation_id, typing } = event;
+  const validId = typeof conversation_id === "string" && UUID.test(conversation_id);
+  if (!validId || typeof typing !== "boolean") {
+    return sendEvent(socket, { type: "error", reason: "invalid_typing" });
+  }
+  const memberIds = await conversationMemberIds(conversation_id);
+  if (!memberIds.includes(userId)) return; // not a member: nothing to tell anyone
+
+  for (const memberId of memberIds) {
+    if (memberId !== userId) {
+      notifyUser(memberId, { type: "typing", conversation_id, user_id: userId, typing });
+    }
+  }
+}
+
 async function handleEvent(userId: string, socket: WebSocket, event: Record<string, unknown>) {
   switch (event.type) {
     case "message.send": {
@@ -99,6 +124,8 @@ async function handleEvent(userId: string, socket: WebSocket, event: Record<stri
       return handleReceipt(userId, socket, "delivered", event);
     case "receipt.read":
       return handleReceipt(userId, socket, "read", event);
+    case "typing":
+      return handleTyping(userId, socket, event);
     default:
       return sendEvent(socket, { type: "error", reason: "unknown_event" });
   }

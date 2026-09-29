@@ -41,6 +41,7 @@ describe("POST /conversations", () => {
       peer: { id: bob.id, username: "bob", display_name: "BOB" },
       peer_delivered_up_to_seq: 0,
       peer_read_up_to_seq: 0,
+      my_read_up_to_seq: 0,
     });
 
     const again = await request("POST", "/conversations", {
