@@ -8,5 +8,6 @@ export default defineConfig({
     fileParallelism: false,
     testTimeout: 15_000,
     hookTimeout: 60_000,
+    coverage: { include: ["src/**"], reporter: ["text", "html"] },
   },
 });

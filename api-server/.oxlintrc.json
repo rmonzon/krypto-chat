@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "oxc", "node", "vitest"],
+  "rules": {
+    "vitest/expect-expect": ["warn", { "assertFunctionNames": ["expect", "*.expectNone"] }],
+    "vitest/valid-expect": ["warn", { "maxArgs": 2 }]
+  },
+  "overrides": [
+    {
+      "files": ["test/helpers.ts"],
+      "rules": { "vitest/no-standalone-expect": "off" }
+    }
+  ]
+}
