@@ -89,12 +89,12 @@ krypto-chat/
 
 ## API (draft)
 ### REST
-Every request except `/health` and `/invites/check` sends `Authorization: Bearer <supabase JWT>`. Sign-up and sign-in go straight to Supabase Auth. JSON fields are snake_case, and errors look like `{ "error": "<code>" }`.
+Every request except `/health` and `/invites/check` sends `Authorization: Bearer <supabase JWT>`. Sign-up and sign-in go straight to Supabase Auth. JSON fields are snake_case, and errors look like `{ "error": "<code>" }`; unexpected server failures are 500 `internal_error`, with no internal details. Request bodies that fail schema validation get Fastify's 400 validation error. Text inputs refuse NUL characters, which Postgres can't store.
 - `GET /me`: the caller's profile, or 404 `profile_not_found` (the client then shows profile setup)
 - `POST /profiles {username, display_name, invite_code?}`: create the caller's profile after sign-up, claiming an invite (from the body, else the account's `invite_code` metadata). `username` must match `^[a-z0-9_]{3,30}$`. Errors: 403 `invite_required`, 400 `invalid_code`, 404 `invite_not_found`, 410 `invite_used` / `invite_expired`, 409 `username_taken` / `profile_exists`. If the invite has a creator, it also opens their conversation and sends them `invite.redeemed`
 - `GET /users?q=`: search profiles by username prefix (case-insensitive, excludes the caller, max 20)
 - `POST /conversations {peer_id}`: creates the 1:1 conversation (201) or returns the existing one (200). Errors: 400 `cannot_message_self`, 403 `profile_required`, 404 `user_not_found`
-- `GET /conversations`: the caller's conversations, most recently active first, each as `{id, last_seq, last_change_seq, created_at, last_message_at, peer: {id, username, display_name}, peer_delivered_up_to_seq, peer_read_up_to_seq, my_read_up_to_seq}`
+- `GET /conversations`: the caller's conversations, most recently active first, each as `{id, last_seq, last_change_seq, message_ttl_seconds, created_at, last_message_at, peer: {id, username, display_name}, peer_delivered_up_to_seq, peer_read_up_to_seq, my_read_up_to_seq}`
 - `GET /conversations/:id/messages?before_seq=&limit=50`: message history in ascending `seq` order (the latest page by default; `before_seq` pages backwards), as `{messages, has_more, up_to_seq?}`. `has_more` says whether anything older remains. The latest page also has `up_to_seq`: every message up to it is in the page or expired. 404 `conversation_not_found` if the caller isn't a member
 - `PATCH /conversations/:id/messages/:seq {body}`: edit one of the caller's messages. Returns `{message}` and sends `message.updated` to every member's sockets. Errors: 404 `message_not_found` (also when the caller isn't a member), 403 `not_your_message` / `edit_window_expired`, 409 `message_deleted`
 - `DELETE /conversations/:id/messages/:seq`: delete one of the caller's messages for everyone, leaving a tombstone. Same response and errors as the edit
