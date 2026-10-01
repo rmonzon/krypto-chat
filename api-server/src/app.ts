@@ -1,14 +1,16 @@
 import Fastify, { type FastifyError } from "fastify";
 import { requireAuth } from "./auth.js";
 import { pool } from "./db.js";
-import { registerRealtime } from "./realtime/index.js";
+import { registerRealtime, type RealtimeOptions } from "./realtime/index.js";
 import { conversationRoutes } from "./routes/conversations.js";
 import { inviteRoutes, publicInviteRoutes } from "./routes/invites.js";
 import { profileRoutes } from "./routes/profiles.js";
 import { syncRoutes } from "./routes/sync.js";
 import { userRoutes } from "./routes/users.js";
 
-export async function buildApp({ logger = true }: { logger?: boolean } = {}) {
+export type AppOptions = { logger?: boolean; realtime?: RealtimeOptions };
+
+export async function buildApp({ logger = true, realtime }: AppOptions = {}) {
   const app = Fastify({ logger });
 
   // Unexpected failures answer in the API's { error } shape, without internals
@@ -43,7 +45,7 @@ export async function buildApp({ logger = true }: { logger?: boolean } = {}) {
     await authed.register(syncRoutes);
   });
 
-  await registerRealtime(app);
+  await registerRealtime(app, realtime);
 
   return app;
 }

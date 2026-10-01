@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { pool } from "../src/db.js";
 import { sendMessage } from "../src/messages/service.js";
 import { createConversation, createUser, request, useTestServer } from "./helpers.js";
 
@@ -67,6 +68,36 @@ describe("POST /sync", () => {
     });
     expect(second.body.has_more).toBe(false);
     expect(seqsOf(second.body.messages)).toEqual(Array.from({ length: 50 }, (_, i) => i + 101));
+  });
+
+  it("pages changes with has_more when more than a page was edited", async () => {
+    const alice = await createUser("alice");
+    const bob = await createUser("bob");
+    const id = await createConversation(alice, bob);
+    await insertMessages(alice.id, id, 101);
+    // As if each message had been edited once, in seq order.
+    await pool.query(
+      "update messages set change_seq = seq, edited_at = now() where conversation_id = $1",
+      [id],
+    );
+    await pool.query("update conversations set last_change_seq = 101 where id = $1", [id]);
+
+    const first = await request("POST", "/sync", {
+      token: bob.token,
+      body: { cursors: { [id]: 101 } },
+    });
+    expect(first.body.messages).toEqual([]);
+    expect(first.body.has_more).toBe(true);
+    expect(first.body.changes.map((m: any) => m.change_seq)).toEqual(
+      Array.from({ length: 100 }, (_, i) => i + 1),
+    );
+
+    const second = await request("POST", "/sync", {
+      token: bob.token,
+      body: { cursors: { [id]: 101 }, change_cursors: { [id]: 100 } },
+    });
+    expect(second.body.has_more).toBe(false);
+    expect(second.body.changes.map((m: any) => m.change_seq)).toEqual([101]);
   });
 
   it("never leaks other users' conversations and validates cursors", async () => {

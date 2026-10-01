@@ -17,6 +17,12 @@ describe("auth", () => {
     expect(res).toEqual({ status: 200, body: { status: "ok", db: "ok" } });
   });
 
+  it("reports a degraded /health when the database is unreachable", async () => {
+    vi.spyOn(pool, "query").mockRejectedValueOnce(new Error("connection refused"));
+    const res = await request("GET", "/health");
+    expect(res).toEqual({ status: 503, body: { status: "degraded", db: "error" } });
+  });
+
   it("answers unexpected failures with internal_error, without internals", async () => {
     const { token } = await createAuthUser();
     vi.spyOn(pool, "query").mockRejectedValueOnce(new Error('relation "profiles" is locked'));
@@ -116,6 +122,15 @@ describe("user search", () => {
     expect(underscore.body.users.map((u: { username: string }) => u.username)).toEqual(["a_b"]);
     const percent = await request("GET", "/users?q=%25", { token: me.token });
     expect(percent.body.users).toEqual([]);
+  });
+
+  it("returns at most 20 matches, in username order", async () => {
+    const me = await createUser("searcher");
+    for (let i = 21; i >= 1; i--) await createUser(`user${String(i).padStart(2, "0")}`);
+    const res = await request("GET", "/users?q=user", { token: me.token });
+    expect(res.body.users.map((u: { username: string }) => u.username)).toEqual(
+      Array.from({ length: 20 }, (_, i) => `user${String(i + 1).padStart(2, "0")}`),
+    );
   });
 
   it("rejects a query with NUL characters", async () => {

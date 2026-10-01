@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { importJWK, SignJWT } from "jose";
 import { afterAll, beforeAll, beforeEach, expect, inject } from "vitest";
-import { buildApp } from "../src/app.js";
+import { buildApp, type AppOptions } from "../src/app.js";
 import { pool } from "../src/db.js";
 import { createInvite } from "../src/invites/service.js";
 
@@ -31,13 +31,14 @@ let server: Server;
 
 /**
  * Starts the real app on a random port for the current test file, and gives
- * every test an empty database.
+ * every test an empty database. options override the app's defaults, e.g.
+ * shorter socket timeouts.
  */
-export function useTestServer() {
+export function useTestServer(options: AppOptions = {}) {
   let app: Awaited<ReturnType<typeof buildApp>>;
 
   beforeAll(async () => {
-    app = await buildApp({ logger: false });
+    app = await buildApp({ logger: false, ...options });
     await app.listen({ port: 0, host: "127.0.0.1" });
     const { port } = app.server.address() as AddressInfo;
     server = { baseUrl: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}/ws` };
@@ -53,6 +54,11 @@ export function useTestServer() {
     await app.close();
     await pool.end();
   });
+}
+
+/** The current test file's WebSocket endpoint, for clients other than TestSocket. */
+export function wsUrl() {
+  return server.wsUrl;
 }
 
 export async function request<T = any>(
@@ -145,6 +151,11 @@ export class TestSocket {
 
   send(event: object) {
     this.ws.send(JSON.stringify(event));
+  }
+
+  /** Sends a frame as is, e.g. something that isn't JSON. */
+  sendRaw(data: string) {
+    this.ws.send(data);
   }
 
   /** Resolves with the next event of this type (buffered or future). */

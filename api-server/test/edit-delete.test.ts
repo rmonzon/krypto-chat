@@ -84,6 +84,19 @@ describe("PATCH /conversations/:id/messages/:seq", () => {
     bobSocket.close();
   });
 
+  it("treats an expired message as gone, even before the sweeper deletes it", async () => {
+    const { alice, aliceSocket, bobSocket, path } = await setup();
+    await pool.query("update messages set expires_at = now() - interval '1 second'");
+
+    const gone = { status: 404, body: { error: "message_not_found" } };
+    const edit = await request("PATCH", path, { token: alice.token, body: { body: "x" } });
+    expect(edit).toMatchObject(gone);
+    expect(await request("DELETE", path, { token: alice.token })).toMatchObject(gone);
+    await bobSocket.expectNone("message.updated");
+    aliceSocket.close();
+    bobSocket.close();
+  });
+
   it("rejects a body with NUL characters, which Postgres can't store", async () => {
     const { alice, aliceSocket, bobSocket, path } = await setup();
     const res = await request("PATCH", path, { token: alice.token, body: { body: "a\u0000b" } });
