@@ -10,8 +10,8 @@ import {
   normalizeInviteCode,
   type InviteFailure,
 } from "../invites/service.js";
+import { USERNAME_PATTERN } from "../protocol.js";
 import { notifyUser } from "../realtime/index.js";
-import { USERNAME_PATTERN } from "../validation.js";
 
 const codeBody = {
   body: {

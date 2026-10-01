@@ -7,12 +7,9 @@ import {
   conversationMemberIds,
   type ReceiptKind,
 } from "../conversations/service.js";
-import {
-  sendMessage,
-  SYSTEM_CONTENT_PREFIX,
-  type SendMessageInput,
-} from "../messages/service.js";
-import { hasNul, MAX_BODY_LENGTH } from "../validation.js";
+import { sendMessage, type SendMessageInput } from "../messages/service.js";
+import { MAX_BODY_LENGTH, SYSTEM_CONTENT_PREFIX } from "../protocol.js";
+import { hasNul } from "../validation.js";
 import { addConnection, notifyUser, removeConnection, sendEvent } from "./connections.js";
 
 // Real-time module. The rest of the app should only talk to it through the

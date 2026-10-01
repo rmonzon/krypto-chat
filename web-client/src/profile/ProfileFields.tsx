@@ -1,3 +1,4 @@
+import { USERNAME_PATTERN } from '../lib/limits'
 import { Icon } from '../ui/Icon'
 
 type Props = {
@@ -35,7 +36,7 @@ export function ProfileFields({
           autoFocus={autoFocus}
           spellCheck={false}
           autoComplete="username"
-          pattern="[a-z0-9_]{3,30}"
+          pattern={USERNAME_PATTERN}
           title="3–30 characters: lowercase letters, numbers, underscore"
           aria-describedby={`${idPrefix}-username-hint`}
           value={username}

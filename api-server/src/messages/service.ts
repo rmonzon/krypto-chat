@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { lockConversationForMember } from "../conversations/service.js";
 import { pool, withTransaction } from "../db.js";
+import {
+  EDIT_WINDOW_MS,
+  SYSTEM_CONTENT_PREFIX,
+  TTL_NOTICE_CONTENT_TYPE,
+} from "../protocol.js";
 
 export type MessageDto = {
   id: string;
@@ -41,16 +46,6 @@ function toMessage(row: MessageRow): MessageDto {
     change_seq: row.change_seq === null ? null : Number(row.change_seq),
   };
 }
-
-/** How long after sending a message its sender can still edit or delete it. */
-const EDIT_WINDOW_MS = 15 * 60 * 1000;
-
-/**
- * Content type of the notice posted when someone changes the auto-delete
- * timer; body is {"ttl_seconds": n | null}. Clients can't send this prefix.
- */
-export const SYSTEM_CONTENT_PREFIX = "application/vnd.krypto-chat.";
-const TTL_NOTICE_CONTENT_TYPE = `${SYSTEM_CONTENT_PREFIX}ttl+json`;
 
 /**
  * Appends a message with the conversation's next seq, expiring per its
@@ -125,9 +120,6 @@ export async function sendMessage(
     return { ok: true, message, duplicate: false, memberIds };
   });
 }
-
-/** Auto-delete timers clients can pick: 5 minutes to 30 days. */
-export const TTL_OPTIONS_SECONDS = [300, 3600, 86_400, 604_800, 2_592_000];
 
 type SetTtlResult =
   | { ok: true; changed: false }

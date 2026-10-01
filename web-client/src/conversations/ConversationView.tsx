@@ -4,6 +4,7 @@ import { compareMessages, msgKey, type ChatDb } from '../lib/db'
 import { canChange, changeErrorMessage } from '../lib/edits'
 import { isExpired, ttlLabel, ttlNotice } from '../lib/expiry'
 import type { OlderPage } from '../lib/history'
+import { MAX_BODY_LENGTH } from '../lib/limits'
 import { highestPeerSeq } from '../lib/receipts'
 import { deliveryState } from '../lib/status'
 import { dayKey } from '../lib/time'
@@ -313,7 +314,7 @@ export function ConversationView({
           placeholder={editing ? 'edit message…' : `message @${peer.username}…`}
           aria-label={editing ? 'Edit message' : `Message @${peer.username}`}
           value={draft}
-          maxLength={10_000}
+          maxLength={MAX_BODY_LENGTH}
           onChange={(e) => {
             setDraft(e.target.value)
             if (!editing) onDraftChange(e.target.value)

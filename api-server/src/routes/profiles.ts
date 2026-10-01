@@ -6,8 +6,9 @@ import {
 } from "../conversations/service.js";
 import { pool, withTransaction } from "../db.js";
 import { inviteFailure, normalizeInviteCode, type InviteFailure } from "../invites/service.js";
+import { USERNAME_PATTERN } from "../protocol.js";
 import { notifyUser } from "../realtime/index.js";
-import { NO_NUL_PATTERN, USERNAME_PATTERN } from "../validation.js";
+import { NO_NUL_PATTERN } from "../validation.js";
 
 type CreateProfileBody = { username: string; display_name: string; invite_code?: string };
 type Profile = { id: string; username: string; display_name: string };

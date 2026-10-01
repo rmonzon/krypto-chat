@@ -5,14 +5,10 @@ import {
   listConversations,
 } from "../conversations/service.js";
 import { pool, withTransaction } from "../db.js";
-import {
-  changeMessage,
-  listMessages,
-  setMessageTtl,
-  TTL_OPTIONS_SECONDS,
-} from "../messages/service.js";
+import { changeMessage, listMessages, setMessageTtl } from "../messages/service.js";
+import { MAX_BODY_LENGTH, TTL_OPTIONS_SECONDS } from "../protocol.js";
 import { notifyUser } from "../realtime/index.js";
-import { MAX_BODY_LENGTH, NO_NUL_PATTERN } from "../validation.js";
+import { NO_NUL_PATTERN } from "../validation.js";
 
 const changeErrorStatus = {
   message_not_found: 404,
