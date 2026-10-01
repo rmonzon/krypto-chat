@@ -11,6 +11,7 @@ import {
   type InviteFailure,
 } from "../invites/service.js";
 import { USERNAME_PATTERN } from "../protocol.js";
+import { perIp, perUser, type RateLimits } from "../rateLimits.js";
 import { notifyUser } from "../realtime/index.js";
 
 const codeBody = {
@@ -29,16 +30,22 @@ async function hasProfile(userId: string) {
 
 const USERNAME = new RegExp(USERNAME_PATTERN);
 
+export type InviteRouteOptions = { rateLimits: RateLimits };
+
 /**
  * No auth: lets the sign-up form check a code before creating the account,
  * and (with a usable code only, so it can't be used to probe for users)
  * whether a username is free. Nothing is reserved: the code is claimed and
  * the username taken when the new user's profile is created.
  */
-export async function publicInviteRoutes(app: FastifyInstance) {
+export async function publicInviteRoutes(
+  app: FastifyInstance,
+  { rateLimits }: InviteRouteOptions,
+) {
   app.post<{ Body: { code: string; username?: string } }>(
     "/invites/check",
     {
+      config: perIp(rateLimits.inviteCheck),
       schema: {
         body: {
           type: "object",
@@ -74,10 +81,10 @@ export async function publicInviteRoutes(app: FastifyInstance) {
   );
 }
 
-export async function inviteRoutes(app: FastifyInstance) {
+export async function inviteRoutes(app: FastifyInstance, { rateLimits }: InviteRouteOptions) {
   // Creates a one-time invite code. It opens a conversation with the caller
   // when an existing user redeems it, or lets a new user sign up.
-  app.post("/invites", async (request, reply) => {
+  app.post("/invites", { config: perUser(rateLimits.inviteCreate) }, async (request, reply) => {
     if (!(await hasProfile(request.userId))) {
       return reply.code(403).send({ error: "profile_required" });
     }
@@ -88,7 +95,7 @@ export async function inviteRoutes(app: FastifyInstance) {
   // with its creator, and tells the creator's clients who joined.
   app.post<{ Body: { code: string } }>(
     "/invites/redeem",
-    { schema: codeBody },
+    { schema: codeBody, config: perUser(rateLimits.inviteRedeem) },
     async (request, reply) => {
       const me = request.userId;
       const code = normalizeInviteCode(request.body.code);

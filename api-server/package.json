@@ -17,6 +17,7 @@
     "invite:create": "tsx --env-file=.env scripts/create-invite.ts"
   },
   "dependencies": {
+    "@fastify/rate-limit": "^11.2.0",
     "@fastify/websocket": "^11.3.1",
     "fastify": "^5.12.5",
     "jose": "^6.2.12",
