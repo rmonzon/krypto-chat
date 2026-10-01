@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { conversation, freshDb, pendingMessage, serverMessage } from '../test/fakes'
 import {
+  advanceChangeCursor,
   advanceCursor,
   advanceMyRead,
   compareConversations,
@@ -9,6 +10,7 @@ import {
   fromServer,
   getChatDb,
   putConversations,
+  putServerMessages,
 } from './db'
 import type { Conversation } from './types'
 
@@ -104,7 +106,7 @@ describe('compareMessages', () => {
 
 describe('compareConversations', () => {
   it('puts the most recently active first, falling back to creation time', () => {
-    const base = { last_seq: 0, peer: { id: 'p', username: 'p', display_name: 'P' }, peer_delivered_up_to_seq: 0, peer_read_up_to_seq: 0, my_read_up_to_seq: 0 }
+    const base = { last_seq: 0, last_change_seq: 0, peer: { id: 'p', username: 'p', display_name: 'P' }, peer_delivered_up_to_seq: 0, peer_read_up_to_seq: 0, my_read_up_to_seq: 0 }
     const oldButActive: Conversation = { ...base, id: 'a', created_at: '2026-01-01T00:00:00Z', last_message_at: '2026-01-05T00:00:00Z' }
     const newQuiet: Conversation = { ...base, id: 'b', created_at: '2026-01-03T00:00:00Z', last_message_at: null }
     const oldQuiet: Conversation = { ...base, id: 'c', created_at: '2026-01-02T00:00:00Z', last_message_at: null }
@@ -127,5 +129,45 @@ describe('deleteChatDb', () => {
     await getChatDb(userId).messages.put(pendingMessage())
     await deleteChatDb(userId)
     expect(await getChatDb(userId).messages.count()).toBe(0)
+  })
+})
+
+describe('putServerMessages', () => {
+  it('never lets an older snapshot undo a newer edit or delete', async () => {
+    const db = freshDb()
+    const original = serverMessage({ seq: 1, body: 'helo' })
+    const key: [string, string] = [original.sender_id, original.client_msg_id]
+    const edited = { ...original, body: 'hello', edited_at: '2026-01-01T00:01:00Z', change_seq: 1 }
+    const deleted = { ...original, body: '', deleted_at: '2026-01-01T00:02:00Z', change_seq: 2 }
+
+    await putServerMessages(db, [deleted])
+    await putServerMessages(db, [edited])
+    await putServerMessages(db, [original])
+    expect(await db.messages.get(key)).toMatchObject({ body: '', change_seq: 2 })
+  })
+
+  it('with onlyExisting, updates stored messages but adds nothing', async () => {
+    const db = freshDb()
+    const stored = serverMessage({ seq: 5, body: 'a' })
+    await putServerMessages(db, [stored])
+
+    await putServerMessages(
+      db,
+      [
+        { ...stored, body: 'b', change_seq: 1 },
+        serverMessage({ seq: 2, change_seq: 2 }), // older history that isn't loaded
+      ],
+      { onlyExisting: true },
+    )
+    expect((await db.messages.toArray()).map((m) => [m.seq, m.body])).toEqual([[5, 'b']])
+  })
+})
+
+describe('advanceChangeCursor', () => {
+  it('only moves forward', async () => {
+    const db = freshDb()
+    await advanceChangeCursor(db, 'a', 3)
+    await advanceChangeCursor(db, 'a', 1)
+    expect((await db.change_cursors.get('a'))?.seq).toBe(3)
   })
 })

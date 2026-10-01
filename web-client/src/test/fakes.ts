@@ -52,6 +52,9 @@ export function serverMessage(overrides: Partial<ServerMessage> = {}): ServerMes
     content_type: 'text/plain',
     body: 'hello',
     created_at: '2026-01-01T00:00:00.000Z',
+    edited_at: null,
+    deleted_at: null,
+    change_seq: null,
     ...overrides,
   }
 }
@@ -97,6 +100,7 @@ export function conversation(overrides: Partial<Conversation> = {}): Conversatio
     id: 'conv-1',
     peer: { id: 'peer', username: 'peer', display_name: 'Peer' },
     last_seq: 0,
+    last_change_seq: 0,
     created_at: '2026-01-01T00:00:00.000Z',
     last_message_at: null,
     peer_delivered_up_to_seq: 0,

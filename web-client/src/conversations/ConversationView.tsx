@@ -8,7 +8,9 @@ import {
   type FormEvent,
 } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
+import { ApiError } from '../lib/api'
 import { compareMessages, type ChatDb } from '../lib/db'
+import { canChange } from '../lib/edits'
 import { dayKey, formatDayLabel, formatTime } from '../lib/time'
 import type { Conversation, Message } from '../lib/types'
 import { Avatar } from '../ui/Avatar'
@@ -30,6 +32,10 @@ type Props = {
   onDraftChange: (draft: string) => void
   onSend: (body: string) => void
   onRetry: (message: Message) => void
+  /** Saves an edit of one of my messages; rejects if the server refuses it. */
+  onEdit: (message: Message, body: string) => Promise<void>
+  /** Deletes one of my messages for everyone; rejects if the server refuses it. */
+  onDelete: (message: Message) => Promise<void>
   /** Called with the highest peer seq while the conversation is visible. */
   onRead: (seq: number) => void
   /** Loads the page before beforeSeq; resolves with how many messages were fetched. */
@@ -38,6 +44,18 @@ type Props = {
 
 // Stable fallback while the live query loads, so effects keyed on messages don't rerun every render.
 const NO_MESSAGES: Message[] = []
+
+// How often to re-check which messages are still inside the edit window.
+const EDIT_WINDOW_TICK_MS = 10_000
+
+const msgKey = (m: Message) => `${m.sender_id}:${m.client_msg_id}`
+
+function changeErrorText(err: unknown) {
+  const code = err instanceof ApiError ? err.code : null
+  if (code === 'edit_window_expired') return 'too late: messages can only be changed for 15 minutes.'
+  if (code === 'message_deleted') return 'that message was already deleted.'
+  return 'couldn’t save the change. check your connection and try again.'
+}
 
 type Status = { label: string; icon: IconName; tone?: 'pending' | 'read' | 'failed' }
 
@@ -73,10 +91,19 @@ export function ConversationView({
   onDraftChange,
   onSend,
   onRetry,
+  onEdit,
+  onDelete,
   onRead,
   onLoadOlder,
 }: Props) {
   const [draft, setDraft] = useState('')
+  // The message being edited in the compose dock, and the draft it replaced.
+  const [editing, setEditing] = useState<Message | null>(null)
+  const savedDraft = useRef('')
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null)
+  const [changeBusy, setChangeBusy] = useState(false)
+  const [changeError, setChangeError] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   const messages = useLiveQuery(
     async () =>
       (await db.messages.where('conversation_id').equals(conversation.id).toArray()).sort(
@@ -169,10 +196,64 @@ export function ConversationView({
     return () => document.removeEventListener('visibilitychange', markIfVisible)
   }, [latestPeerSeq, onRead])
 
-  function handleSubmit(e: FormEvent) {
+  // Edit/delete actions disappear once a message leaves the edit window.
+  const [now, setNow] = useState(() => Date.now())
+  const anyChangeable = online && messages.some((m) => canChange(m, myId, now))
+  useEffect(() => {
+    if (!anyChangeable) return
+    const timer = setInterval(() => setNow(Date.now()), EDIT_WINDOW_TICK_MS)
+    return () => clearInterval(timer)
+  }, [anyChangeable])
+
+  // Stop editing if the message gets deleted meanwhile (e.g. from another tab).
+  const editingDeleted =
+    editing !== null && messages.some((m) => msgKey(m) === msgKey(editing) && m.deleted_at)
+  useEffect(() => {
+    if (editingDeleted) stopEditing()
+  }, [editingDeleted])
+
+  function startEditing(m: Message) {
+    if (!editing) savedDraft.current = draft
+    onDraftChange('') // editing isn't typing a new message
+    setEditing(m)
+    setDraft(m.body)
+    setConfirmingDelete(null)
+    setChangeError(null)
+    inputRef.current?.focus()
+  }
+
+  function stopEditing() {
+    setEditing(null)
+    setDraft(savedDraft.current)
+    savedDraft.current = ''
+  }
+
+  async function runChange(change: () => Promise<void>) {
+    setChangeBusy(true)
+    setChangeError(null)
+    try {
+      await change()
+      return true
+    } catch (err) {
+      setChangeError(changeErrorText(err))
+      return false
+    } finally {
+      setChangeBusy(false)
+    }
+  }
+
+  async function confirmDelete(m: Message) {
+    if (await runChange(() => onDelete(m))) setConfirmingDelete(null)
+  }
+
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     const body = draft.trim()
     if (!body) return
+    if (editing) {
+      if (body === editing.body || (await runChange(() => onEdit(editing, body)))) stopEditing()
+      return
+    }
     onSend(body)
     setDraft('')
   }
@@ -215,15 +296,24 @@ export function ConversationView({
           const mine = m.sender_id === myId
           const day = dayKey(m.created_at)
           const newDay = i === 0 || dayKey(messages[i - 1].created_at) !== day
-          const status = mine ? messageStatus(m, conversation, online) : null
+          const deleted = Boolean(m.deleted_at)
+          const status = mine && !deleted ? messageStatus(m, conversation, online) : null
+          const key = msgKey(m)
+          const changeable = online && canChange(m, myId, now)
           return (
-            <Fragment key={`${m.sender_id}:${m.client_msg_id}`}>
+            <Fragment key={key}>
               {newDay && (
                 <li className="thread-day">
                   <time dateTime={day}>— {formatDayLabel(m.created_at)} —</time>
                 </li>
               )}
-              <li className={`msg ${mine ? 'mine' : 'theirs'}${m.status === 'sending' ? ' pending' : ''}`}>
+              <li
+                className={
+                  `msg ${mine ? 'mine' : 'theirs'}` +
+                  (m.status === 'sending' ? ' pending' : '') +
+                  (editing && msgKey(editing) === key ? ' editing' : '')
+                }
+              >
                 <span className="log-meta">
                   <time className="log-ts" dateTime={m.created_at}>
                     [{formatTime(m.created_at)}]
@@ -233,7 +323,13 @@ export function ConversationView({
                   </span>
                 </span>
                 <span className="msg-body">
-                  {m.body}
+                  {deleted ? <span className="msg-deleted">message deleted</span> : m.body}
+                  {m.edited_at && !deleted && (
+                    <span className="msg-edited" title={`edited ${formatTime(m.edited_at)}`}>
+                      {' '}
+                      (edited)
+                    </span>
+                  )}
                   {status &&
                     (status.tone === 'failed' ? (
                       <button type="button" className="msg-status failed" onClick={() => onRetry(m)}>
@@ -250,6 +346,50 @@ export function ConversationView({
                       </span>
                     ))}
                 </span>
+                {changeable &&
+                  (confirmingDelete === key ? (
+                    <span className="msg-actions confirming" role="group" aria-label="Confirm delete">
+                      <span className="msg-confirm-q">delete for everyone?</span>
+                      <button
+                        type="button"
+                        className="msg-act danger"
+                        disabled={changeBusy}
+                        onClick={() => void confirmDelete(m)}
+                      >
+                        yes
+                      </button>
+                      <button
+                        type="button"
+                        className="msg-act"
+                        disabled={changeBusy}
+                        onClick={() => setConfirmingDelete(null)}
+                      >
+                        no
+                      </button>
+                    </span>
+                  ) : (
+                    <span className="msg-actions">
+                      <button
+                        type="button"
+                        className="msg-act"
+                        aria-label="Edit message"
+                        onClick={() => startEditing(m)}
+                      >
+                        edit
+                      </button>
+                      <button
+                        type="button"
+                        className="msg-act danger"
+                        aria-label="Delete message"
+                        onClick={() => {
+                          setChangeError(null)
+                          setConfirmingDelete(key)
+                        }}
+                      >
+                        del
+                      </button>
+                    </span>
+                  ))}
               </li>
             </Fragment>
           )
@@ -275,19 +415,43 @@ export function ConversationView({
         <li ref={bottomRef} aria-hidden />
       </ol>
 
-      <form className="compose-dock" onSubmit={handleSubmit}>
+      {(editing || changeError) && (
+        <div className={'compose-banner' + (changeError ? ' error' : '')} role="status">
+          {changeError ?? 'editing message · esc to cancel'}
+          {editing && (
+            <button type="button" className="msg-act" onClick={stopEditing}>
+              cancel
+            </button>
+          )}
+          {!editing && (
+            <button type="button" className="msg-act" onClick={() => setChangeError(null)}>
+              dismiss
+            </button>
+          )}
+        </div>
+      )}
+      <form className="compose-dock" onSubmit={(e) => void handleSubmit(e)}>
         <input
-          placeholder={`message @${peer.username}…`}
-          aria-label={`Message @${peer.username}`}
+          ref={inputRef}
+          placeholder={editing ? 'edit message…' : `message @${peer.username}…`}
+          aria-label={editing ? 'Edit message' : `Message @${peer.username}`}
           value={draft}
           maxLength={10_000}
           onChange={(e) => {
             setDraft(e.target.value)
-            onDraftChange(e.target.value)
+            if (!editing) onDraftChange(e.target.value)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && editing) stopEditing()
           }}
         />
-        <button type="submit" className="send-btn" disabled={!draft.trim()} aria-label="Send">
-          <Icon name="send" size={17} />
+        <button
+          type="submit"
+          className="send-btn"
+          disabled={!draft.trim() || (editing !== null && (changeBusy || !online))}
+          aria-label={editing ? 'Save edit' : 'Send'}
+        >
+          <Icon name={editing ? 'check' : 'send'} size={17} />
         </button>
       </form>
     </section>

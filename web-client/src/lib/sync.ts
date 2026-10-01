@@ -1,5 +1,11 @@
 import { api } from './api'
-import { advanceCursor, fromServer, putConversations, type ChatDb } from './db'
+import {
+  advanceChangeCursor,
+  advanceCursor,
+  putConversations,
+  putServerMessages,
+  type ChatDb,
+} from './db'
 import type { Receipts } from './receipts'
 import type { ServerMessage, SyncResponse } from './types'
 
@@ -9,7 +15,8 @@ const MAX_PAGES = 20
 
 /**
  * Catches the local DB up with the server after (re)connecting: new
- * conversations, current watermarks, and any messages missed while offline.
+ * conversations, current watermarks, any messages missed while offline, and
+ * edits/deletes of messages already stored.
  */
 export class Syncer {
   private readonly db: ChatDb
@@ -47,15 +54,27 @@ export class Syncer {
     for (let page = 0; page < MAX_PAGES; page++) {
       const cursors: Record<string, number> = {}
       for (const c of await this.db.cursors.toArray()) cursors[c.conversation_id] = c.seq
+      const changeCursors: Record<string, number> = {}
+      for (const c of await this.db.change_cursors.toArray()) changeCursors[c.conversation_id] = c.seq
 
       const res = await api<SyncResponse>('/sync', {
         method: 'POST',
-        body: JSON.stringify({ cursors }),
+        body: JSON.stringify({ cursors, change_cursors: changeCursors }),
       })
       await this.db.transaction('rw', this.db.conversations, this.db.messages, async () => {
         await putConversations(this.db, res.conversations)
-        await this.db.messages.bulkPut(res.messages.map(fromServer))
+        await putServerMessages(this.db, res.messages)
+        await putServerMessages(this.db, res.changes, { onlyExisting: true })
       })
+
+      // Changes come in change_seq order, so the last one per conversation is
+      // as far as we've applied (a later page may follow). With none, we're
+      // caught up to the snapshot: also true when no cursor was sent, since
+      // the latest page and any history loaded later are already current.
+      const lastChange = new Map(res.changes.map((m) => [m.conversation_id, m.change_seq ?? 0]))
+      for (const c of res.conversations) {
+        await advanceChangeCursor(this.db, c.id, lastChange.get(c.id) ?? c.last_change_seq)
+      }
 
       for (const [conversationId, messages] of groupByConversation(res.messages)) {
         const seqs = messages.map((m) => m.seq)

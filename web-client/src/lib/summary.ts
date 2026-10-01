@@ -4,7 +4,7 @@ import type { Conversation, Message } from './types'
 export type ConversationSummary = {
   /** Latest locally stored message, for the preview line. */
   latest?: Message
-  /** Peer messages after my read watermark that are stored locally. */
+  /** Peer messages after my read watermark that are stored locally (deleted ones don't count). */
   unread: number
   /**
    * True when some messages after my read watermark aren't stored locally
@@ -33,7 +33,7 @@ export function summarizeConversations(
     s.minSeq = Math.min(s.minSeq, m.seq)
     // undefined: cached by an older version that didn't store it; unknown until the next fetch.
     const read = myRead.get(m.conversation_id)
-    if (read !== undefined && m.sender_id !== myId && m.seq > read) s.unread++
+    if (read !== undefined && m.sender_id !== myId && m.seq > read && !m.deleted_at) s.unread++
   }
 
   const result = new Map<string, ConversationSummary>()

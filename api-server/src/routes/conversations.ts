@@ -1,12 +1,25 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   getConversationForUser,
   getOrCreateDirectConversation,
   listConversations,
 } from "../conversations/service.js";
 import { pool, withTransaction } from "../db.js";
-import { listMessages } from "../messages/service.js";
+import { changeMessage, listMessages } from "../messages/service.js";
 import { notifyUser } from "../realtime/index.js";
+
+const changeErrorStatus = {
+  message_not_found: 404,
+  not_your_message: 403,
+  message_deleted: 409,
+  edit_window_expired: 403,
+} as const;
+
+const messageParams = {
+  type: "object",
+  required: ["id", "seq"],
+  properties: { id: { type: "string", format: "uuid" }, seq: { type: "integer", minimum: 1 } },
+} as const;
 
 export async function conversationRoutes(app: FastifyInstance) {
   app.get("/conversations", async (request) => {
@@ -79,5 +92,47 @@ export async function conversationRoutes(app: FastifyInstance) {
       if (!messages) return reply.code(404).send({ error: "conversation_not_found" });
       return { messages };
     },
+  );
+
+  /** Edits (body) or deletes (null) a message, then tells every member's clients. */
+  async function applyChange(
+    userId: string,
+    conversationId: string,
+    seq: number,
+    body: string | null,
+    reply: FastifyReply,
+  ) {
+    const result = await changeMessage(userId, conversationId, seq, body);
+    if (!result.ok) return reply.code(changeErrorStatus[result.reason]).send({ error: result.reason });
+    for (const memberId of result.memberIds) {
+      notifyUser(memberId, { type: "message.updated", message: result.message });
+    }
+    return { message: result.message };
+  }
+
+  // Edit one of your messages, within the edit window.
+  app.patch<{ Params: { id: string; seq: number }; Body: { body: string } }>(
+    "/conversations/:id/messages/:seq",
+    {
+      schema: {
+        params: messageParams,
+        body: {
+          type: "object",
+          required: ["body"],
+          additionalProperties: false,
+          properties: { body: { type: "string", minLength: 1, maxLength: 10_000 } },
+        },
+      },
+    },
+    (request, reply) =>
+      applyChange(request.userId, request.params.id, request.params.seq, request.body.body, reply),
+  );
+
+  // Delete one of your messages for everyone, within the edit window. It stays as a tombstone.
+  app.delete<{ Params: { id: string; seq: number } }>(
+    "/conversations/:id/messages/:seq",
+    { schema: { params: messageParams } },
+    (request, reply) =>
+      applyChange(request.userId, request.params.id, request.params.seq, null, reply),
   );
 }

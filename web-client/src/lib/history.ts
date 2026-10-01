@@ -1,5 +1,5 @@
 import { api } from './api'
-import { fromServer, type ChatDb } from './db'
+import { putServerMessages, type ChatDb } from './db'
 import type { ServerMessage } from './types'
 
 export const OLDER_PAGE_SIZE = 50
@@ -16,6 +16,6 @@ export async function loadOlderMessages(
   const { messages } = await api<{ messages: ServerMessage[] }>(
     `/conversations/${conversationId}/messages?before_seq=${beforeSeq}&limit=${OLDER_PAGE_SIZE}`,
   )
-  await db.messages.bulkPut(messages.map(fromServer))
+  await putServerMessages(db, messages)
   return messages.length
 }

@@ -5,10 +5,11 @@ import {
   advanceCursor,
   advanceMyRead,
   compareConversations,
-  fromServer,
   putConversations,
+  putServerMessages,
   type ChatDb,
 } from '../lib/db'
+import { changeMessage } from '../lib/edits'
 import { loadOlderMessages } from '../lib/history'
 import { Outbox } from '../lib/outbox'
 import { Receipts } from '../lib/receipts'
@@ -104,7 +105,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
           break
         case 'message.new': {
           const { message } = event
-          await db.messages.put(fromServer(message))
+          await putServerMessages(db, [message])
           // Their message is here, so they've stopped typing it.
           if (message.sender_id !== profile.id) typingTracker.update(message.conversation_id, false)
           await advanceCursor(db, message.conversation_id, message.seq, message.seq)
@@ -112,6 +113,10 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
           if (message.sender_id !== profile.id) receipts.markDelivered(message.conversation_id, message.seq)
           break
         }
+        case 'message.updated':
+          // Edited or deleted. Older history that isn't loaded arrives current when fetched.
+          await putServerMessages(db, [event.message], { onlyExisting: true })
+          break
         case 'invite.redeemed':
           // Someone redeemed our invite; the Add peer screen reacts to it too.
           await putConversations(db, [event.conversation])
@@ -180,7 +185,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
     if (!selectedId || loaded[selectedId]) return
     api<{ messages: ServerMessage[] }>(`/conversations/${selectedId}/messages`)
       .then(async ({ messages }) => {
-        await db.messages.bulkPut(messages.map(fromServer))
+        await putServerMessages(db, messages)
         if (messages.length) {
           const seqs = messages.map((m) => m.seq)
           await advanceCursor(db, selectedId, Math.min(...seqs), Math.max(...seqs), true)
@@ -415,6 +420,8 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
             onDraftChange={(draft) => typingSender.draftChanged(selected.id, draft)}
             onSend={(body) => void sendMessage(selected.id, body)}
             onRetry={(m) => void outbox.retry(m.client_msg_id)}
+            onEdit={(m, body) => changeMessage(db, m, body)}
+            onDelete={(m) => changeMessage(db, m, null)}
             onRead={markRead}
             onLoadOlder={loadOlder}
           />

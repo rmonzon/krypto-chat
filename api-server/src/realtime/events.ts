@@ -12,6 +12,8 @@ export type ServerEvent =
       created_at: Date;
     }
   | { type: "message.new"; message: MessageDto }
+  /** A message was edited or deleted (its current state). */
+  | { type: "message.updated"; message: MessageDto }
   | { type: "conversation.new"; conversation: ConversationDto }
   | {
       type: "receipt.update";
