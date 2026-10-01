@@ -10,6 +10,8 @@ export type Conversation = {
   last_seq: number
   /** Counts edits/deletes in this conversation; see ServerMessage.change_seq. */
   last_change_seq: number
+  /** Auto-delete: new messages expire this long after they're sent; null when off. */
+  message_ttl_seconds: number | null
   created_at: string
   last_message_at: string | null
   /** How far the peer has received / read, as conversation seqs. */
@@ -34,10 +36,12 @@ export type ServerMessage = {
   deleted_at: string | null
   /** The conversation change (edit/delete) that last touched it; null if never changed. */
   change_seq: number | null
+  /** When it disappears (the conversation had auto-delete on when it was sent). */
+  expires_at: string | null
 }
 
-/** Fields that only change through edits/deletes; missing on pending messages. */
-type ChangeFields = 'edited_at' | 'deleted_at' | 'change_seq'
+/** Fields the server sets; missing on pending messages (expires_at arrives with the ack). */
+type ChangeFields = 'edited_at' | 'deleted_at' | 'change_seq' | 'expires_at'
 
 export type MessageStatus = 'sending' | 'sent' | 'failed'
 
@@ -69,11 +73,14 @@ export type ServerEvent =
       conversation_id: string
       seq: number
       created_at: string
+      expires_at: string | null
     }
   | { type: 'message.new'; message: ServerMessage }
   /** A message was edited or deleted (its current state). */
   | { type: 'message.updated'; message: ServerMessage }
   | { type: 'conversation.new'; conversation: Conversation }
+  /** Conversation settings changed (e.g. auto-delete). */
+  | { type: 'conversation.updated'; conversation: Conversation }
   | {
       type: 'receipt.update'
       conversation_id: string
@@ -85,6 +92,15 @@ export type ServerEvent =
   | { type: 'typing'; conversation_id: string; user_id: string; typing: boolean }
   | { type: 'error'; reason: string; client_msg_id?: string }
 
+/** A page of history from GET /conversations/:id/messages. */
+export type MessagePage = {
+  messages: ServerMessage[]
+  /** Whether there are messages before this page. */
+  has_more: boolean
+  /** Latest page only: every message up to this seq is in the page or expired. */
+  up_to_seq?: number
+}
+
 export type Invite = { code: string; expires_at: string }
 
 export type SyncResponse = {
@@ -92,5 +108,10 @@ export type SyncResponse = {
   messages: ServerMessage[]
   /** Current state of messages edited/deleted after the change cursors. */
   changes: ServerMessage[]
+  /**
+   * Per conversation: every message up to this seq is in this response,
+   * stored already, or expired. Seqs can have gaps, so cursors move here.
+   */
+  synced_up_to: Record<string, number>
   has_more: boolean
 }

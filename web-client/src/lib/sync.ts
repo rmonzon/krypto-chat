@@ -76,15 +76,19 @@ export class Syncer {
         await advanceChangeCursor(this.db, c.id, lastChange.get(c.id) ?? c.last_change_seq)
       }
 
-      for (const [conversationId, messages] of groupByConversation(res.messages)) {
-        const seqs = messages.map((m) => m.seq)
-        await advanceCursor(
-          this.db,
-          conversationId,
-          Math.min(...seqs),
-          Math.max(...seqs),
-          !(conversationId in cursors), // no cursor sent: server returned the latest page
-        )
+      const received = groupByConversation(res.messages)
+      for (const [conversationId, upTo] of Object.entries(res.synced_up_to)) {
+        const sent = cursors[conversationId]
+        // With a cursor, the response covers everything after it. Without one,
+        // it's the latest page: from its first message (or everything, if empty).
+        const from =
+          sent !== undefined
+            ? sent + 1
+            : Math.min(...(received.get(conversationId) ?? []).map((m) => m.seq), Infinity)
+        await advanceCursor(this.db, conversationId, from === Infinity ? 1 : from, upTo, sent === undefined)
+      }
+
+      for (const [conversationId, messages] of received) {
         const peerSeqs = messages.filter((m) => m.sender_id !== this.userId).map((m) => m.seq)
         if (peerSeqs.length) this.receipts.markDelivered(conversationId, Math.max(...peerSeqs))
       }

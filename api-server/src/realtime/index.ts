@@ -7,7 +7,11 @@ import {
   conversationMemberIds,
   type ReceiptKind,
 } from "../conversations/service.js";
-import { sendMessage, type SendMessageInput } from "../messages/service.js";
+import {
+  sendMessage,
+  SYSTEM_CONTENT_PREFIX,
+  type SendMessageInput,
+} from "../messages/service.js";
 import { addConnection, notifyUser, removeConnection, sendEvent } from "./connections.js";
 
 // Real-time module. The rest of the app should only talk to it through the
@@ -26,6 +30,8 @@ function parseSendMessage(event: Record<string, unknown>): SendMessageInput | un
   if (typeof conversation_id !== "string" || !UUID.test(conversation_id)) return undefined;
   if (typeof content_type !== "string" || content_type.length < 1 || content_type.length > 100)
     return undefined;
+  // Reserved for notices the server posts (e.g. auto-delete changes).
+  if (content_type.startsWith(SYSTEM_CONTENT_PREFIX)) return undefined;
   if (typeof body !== "string" || body.length < 1 || body.length > 10_000) return undefined;
   return { client_msg_id, conversation_id, content_type, body };
 }
@@ -111,6 +117,7 @@ async function handleEvent(userId: string, socket: WebSocket, event: Record<stri
         conversation_id: message.conversation_id,
         seq: message.seq,
         created_at: message.created_at,
+        expires_at: message.expires_at,
       });
       // A retried send was already delivered the first time.
       if (!result.duplicate) {

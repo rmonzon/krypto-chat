@@ -11,6 +11,8 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { ApiError } from '../lib/api'
 import { compareMessages, type ChatDb } from '../lib/db'
 import { canChange } from '../lib/edits'
+import type { OlderPage } from '../lib/history'
+import { isExpired, TTL_OPTIONS, ttlLabel, ttlNotice, ttlNoticeText } from '../lib/expiry'
 import { dayKey, formatDayLabel, formatTime } from '../lib/time'
 import type { Conversation, Message } from '../lib/types'
 import { Avatar } from '../ui/Avatar'
@@ -36,10 +38,12 @@ type Props = {
   onEdit: (message: Message, body: string) => Promise<void>
   /** Deletes one of my messages for everyone; rejects if the server refuses it. */
   onDelete: (message: Message) => Promise<void>
+  /** Turns auto-delete on (seconds) or off (null) for new messages; rejects on failure. */
+  onSetTtl: (ttlSeconds: number | null) => Promise<void>
   /** Called with the highest peer seq while the conversation is visible. */
   onRead: (seq: number) => void
-  /** Loads the page before beforeSeq; resolves with how many messages were fetched. */
-  onLoadOlder: (beforeSeq: number) => Promise<number>
+  /** Loads the page before beforeSeq; resolves with its size and whether there's more. */
+  onLoadOlder: (beforeSeq: number) => Promise<OlderPage>
 }
 
 // Stable fallback while the live query loads, so effects keyed on messages don't rerun every render.
@@ -47,6 +51,8 @@ const NO_MESSAGES: Message[] = []
 
 // How often to re-check which messages are still inside the edit window.
 const EDIT_WINDOW_TICK_MS = 10_000
+// Longest wait between re-renders while messages are due to expire (setTimeout overflows past ~24 days).
+const MAX_EXPIRY_WAIT_MS = 60_000
 
 const msgKey = (m: Message) => `${m.sender_id}:${m.client_msg_id}`
 
@@ -93,6 +99,7 @@ export function ConversationView({
   onRetry,
   onEdit,
   onDelete,
+  onSetTtl,
   onRead,
   onLoadOlder,
 }: Props) {
@@ -104,6 +111,8 @@ export function ConversationView({
   const [changeBusy, setChangeBusy] = useState(false)
   const [changeError, setChangeError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const [ttlMenuOpen, setTtlMenuOpen] = useState(false)
+  const ttlMenuRef = useRef<HTMLDivElement>(null)
   const messages = useLiveQuery(
     async () =>
       (await db.messages.where('conversation_id').equals(conversation.id).toArray()).sort(
@@ -132,10 +141,12 @@ export function ConversationView({
     }
   }, [peerTyping])
 
-  // Seqs are gap-free from 1, so anything above 1 means there's older history.
+  // Seqs start at 1, so the oldest being 1 means there's nothing older. Above
+  // 1 there may be (or the rest expired): ask until the server says that's all.
   const seqs = messages.filter((m) => m.seq !== null).map((m) => m.seq!)
   const oldestSeq = seqs.length ? Math.min(...seqs) : null
-  const hasOlder = oldestSeq !== null && oldestSeq > 1
+  const [noOlder, setNoOlder] = useState(false)
+  const hasOlder = oldestSeq !== null && oldestSeq > 1 && !noOlder
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [olderFailed, setOlderFailed] = useState(false)
   // Scroll position captured before prepending, restored once the list grows.
@@ -148,7 +159,9 @@ export function ConversationView({
     setLoadingOlder(true)
     setOlderFailed(false)
     try {
-      if ((await onLoadOlder(oldestSeq)) === 0) anchor.current = null
+      const page = await onLoadOlder(oldestSeq)
+      if (page.count === 0) anchor.current = null
+      if (!page.hasMore) setNoOlder(true)
     } catch {
       anchor.current = null
       setOlderFailed(true)
@@ -196,18 +209,29 @@ export function ConversationView({
     return () => document.removeEventListener('visibilitychange', markIfVisible)
   }, [latestPeerSeq, onRead])
 
-  // Edit/delete actions disappear once a message leaves the edit window.
+  // Re-render when the next message expires, and periodically while edit/delete
+  // actions are showing (they disappear once a message leaves the edit window).
   const [now, setNow] = useState(() => Date.now())
   const anyChangeable = online && messages.some((m) => canChange(m, myId, now))
+  const nextExpiry = Math.min(
+    Infinity,
+    ...messages.filter((m) => m.expires_at && !isExpired(m, now)).map((m) => Date.parse(m.expires_at!)),
+  )
   useEffect(() => {
-    if (!anyChangeable) return
-    const timer = setInterval(() => setNow(Date.now()), EDIT_WINDOW_TICK_MS)
-    return () => clearInterval(timer)
-  }, [anyChangeable])
+    if (!anyChangeable && nextExpiry === Infinity) return
+    const untilExpiry = nextExpiry - Date.now()
+    const delay = Math.min(anyChangeable ? EDIT_WINDOW_TICK_MS : Infinity, untilExpiry, MAX_EXPIRY_WAIT_MS)
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, delay))
+    return () => clearTimeout(timer)
+  }, [anyChangeable, nextExpiry, now])
 
-  // Stop editing if the message gets deleted meanwhile (e.g. from another tab).
+  // Hidden the moment they expire; the purge in ChatHome deletes them a few seconds later.
+  const visible = messages.filter((m) => !isExpired(m, now))
+
+  // Stop editing if the message gets deleted or expires meanwhile.
   const editingDeleted =
-    editing !== null && messages.some((m) => msgKey(m) === msgKey(editing) && m.deleted_at)
+    editing !== null &&
+    messages.some((m) => msgKey(m) === msgKey(editing) && (m.deleted_at || isExpired(m, now)))
   useEffect(() => {
     if (editingDeleted) stopEditing()
   }, [editingDeleted])
@@ -242,6 +266,34 @@ export function ConversationView({
     }
   }
 
+  // Close the auto-delete menu on Escape or a click outside it.
+  useEffect(() => {
+    if (!ttlMenuOpen) return
+    const onPointer = (e: PointerEvent) => {
+      if (!ttlMenuRef.current?.contains(e.target as Node)) setTtlMenuOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setTtlMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [ttlMenuOpen])
+
+  async function chooseTtl(ttlSeconds: number | null) {
+    setTtlMenuOpen(false)
+    if (ttlSeconds === conversation.message_ttl_seconds) return
+    setChangeError(null)
+    try {
+      await onSetTtl(ttlSeconds)
+    } catch {
+      setChangeError('couldn’t change auto-delete. check your connection and try again.')
+    }
+  }
+
   async function confirmDelete(m: Message) {
     if (await runChange(() => onDelete(m))) setConfirmingDelete(null)
   }
@@ -260,6 +312,8 @@ export function ConversationView({
 
   const peer = conversation.peer
   const peerColor = userColor(peer.username)
+  // ?? null: conversations cached before auto-delete existed lack it.
+  const ttl = conversation.message_ttl_seconds ?? null
 
   return (
     <section className="screen thread">
@@ -273,9 +327,43 @@ export function ConversationView({
             <h2 className="thread-handle">{peer.display_name}</h2>
             <span className="thread-sub">
               @{peer.username}
+              {ttl !== null && <span className="thread-ttl"> · auto-delete {ttlLabel(ttl)}</span>}
               {!online && <span className="thread-offline"> · offline, messages will queue</span>}
             </span>
           </div>
+        </div>
+        <div className="ttl-control" ref={ttlMenuRef}>
+          <button
+            type="button"
+            className={'icon-btn' + (ttl !== null ? ' ttl-on' : '')}
+            title={online ? 'Auto-delete messages' : 'Auto-delete (needs a connection)'}
+            aria-label={`Auto-delete messages: ${ttl === null ? 'off' : ttlLabel(ttl)}`}
+            aria-haspopup="menu"
+            aria-expanded={ttlMenuOpen}
+            disabled={!online}
+            onClick={() => setTtlMenuOpen((open) => !open)}
+          >
+            <Icon name="timer" size={18} />
+            {ttl !== null && <span className="ttl-short">{ttlLabel(ttl, true)}</span>}
+          </button>
+          {ttlMenuOpen && (
+            <div className="ttl-menu" role="menu" aria-label="Auto-delete new messages after">
+              <p className="ttl-menu-title">auto-delete new messages</p>
+              {[null, ...TTL_OPTIONS.map((o) => o.seconds)].map((seconds) => (
+                <button
+                  key={seconds ?? 'off'}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={seconds === ttl}
+                  className={'ttl-option' + (seconds === ttl ? ' current' : '')}
+                  onClick={() => void chooseTtl(seconds)}
+                >
+                  {seconds === null ? 'off' : `after ${ttlLabel(seconds)}`}
+                </button>
+              ))}
+              <p className="ttl-menu-note">applies to messages sent from now on, for both of you.</p>
+            </div>
+          )}
         </div>
       </header>
 
@@ -288,14 +376,30 @@ export function ConversationView({
             </button>
           )}
         </li>
-        {!loaded && messages.length === 0 && <li className="thread-note">loading…</li>}
-        {loaded && messages.length === 0 && (
+        {!loaded && visible.length === 0 && <li className="thread-note">loading…</li>}
+        {loaded && visible.length === 0 && (
           <li className="thread-note">no messages yet. say hi to @{peer.username}.</li>
         )}
-        {messages.map((m, i) => {
+        {visible.map((m, i) => {
           const mine = m.sender_id === myId
           const day = dayKey(m.created_at)
-          const newDay = i === 0 || dayKey(messages[i - 1].created_at) !== day
+          const newDay = i === 0 || dayKey(visible[i - 1].created_at) !== day
+          const notice = ttlNotice(m)
+          if (notice !== undefined) {
+            return (
+              <Fragment key={msgKey(m)}>
+                {newDay && (
+                  <li className="thread-day">
+                    <time dateTime={day}>— {formatDayLabel(m.created_at)} —</time>
+                  </li>
+                )}
+                <li className="thread-notice">
+                  <Icon name="timer" size={12} /> {mine ? 'you' : `@${peer.username}`}{' '}
+                  {ttlNoticeText(notice)} · {formatTime(m.created_at)}
+                </li>
+              </Fragment>
+            )
+          }
           const deleted = Boolean(m.deleted_at)
           const status = mine && !deleted ? messageStatus(m, conversation, online) : null
           const key = msgKey(m)
@@ -321,6 +425,16 @@ export function ConversationView({
                   <span className="log-who" style={mine ? undefined : { color: peerColor }}>
                     &lt;{mine ? myUsername : peer.username}&gt;
                   </span>
+                  {m.expires_at && (
+                    <span
+                      className="msg-expiry"
+                      title={`disappears ${formatDayLabel(m.expires_at).toLowerCase()} at ${formatTime(m.expires_at)}`}
+                      role="img"
+                      aria-label={`Disappears at ${formatTime(m.expires_at)}`}
+                    >
+                      <Icon name="timer" size={11} />
+                    </span>
+                  )}
                 </span>
                 <span className="msg-body">
                   {deleted ? <span className="msg-deleted">message deleted</span> : m.body}

@@ -13,14 +13,15 @@ describe('loadOlderMessages', () => {
     const db = freshDb()
     apiMock.mockResolvedValueOnce({
       messages: [serverMessage({ seq: 48 }), serverMessage({ seq: 49 })],
+      has_more: true,
     })
 
-    const count = await loadOlderMessages(db, 'conv-1', 50)
+    const page = await loadOlderMessages(db, 'conv-1', 50)
 
     expect(apiMock).toHaveBeenCalledExactlyOnceWith(
       `/conversations/conv-1/messages?before_seq=50&limit=${OLDER_PAGE_SIZE}`,
     )
-    expect(count).toBe(2)
+    expect(page).toEqual({ count: 2, hasMore: true })
     const stored = await db.messages.where('conversation_id').equals('conv-1').toArray()
     expect(stored.map((m) => [m.seq, m.status]).sort()).toEqual([
       [48, 'sent'],
@@ -31,15 +32,15 @@ describe('loadOlderMessages', () => {
   it('does not touch the sync cursor (older pages sit below it)', async () => {
     const db = freshDb()
     await db.cursors.put({ conversation_id: 'conv-1', seq: 90 })
-    apiMock.mockResolvedValueOnce({ messages: [serverMessage({ seq: 1 })] })
+    apiMock.mockResolvedValueOnce({ messages: [serverMessage({ seq: 1 })], has_more: false })
 
     await loadOlderMessages(db, 'conv-1', 41)
 
     expect((await db.cursors.get('conv-1'))?.seq).toBe(90)
   })
 
-  it('returns 0 when there is nothing older', async () => {
-    apiMock.mockResolvedValueOnce({ messages: [] })
-    expect(await loadOlderMessages(freshDb(), 'conv-1', 1)).toBe(0)
+  it('reports when the server has nothing older (the rest may have expired)', async () => {
+    apiMock.mockResolvedValueOnce({ messages: [], has_more: false })
+    expect(await loadOlderMessages(freshDb(), 'conv-1', 40)).toEqual({ count: 0, hasMore: false })
   })
 })

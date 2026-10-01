@@ -26,6 +26,9 @@ export function getChatDb(userId: string): ChatDb {
     })
     db.version(2).stores({ cursors: 'conversation_id' })
     db.version(3).stores({ change_cursors: 'conversation_id' })
+    db.version(4).stores({
+      messages: '[sender_id+client_msg_id], conversation_id, status, expires_at',
+    })
     dbs.set(userId, db)
   }
   return db

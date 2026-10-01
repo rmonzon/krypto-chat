@@ -5,7 +5,12 @@ import {
   listConversations,
 } from "../conversations/service.js";
 import { pool, withTransaction } from "../db.js";
-import { changeMessage, listMessages } from "../messages/service.js";
+import {
+  changeMessage,
+  listMessages,
+  setMessageTtl,
+  TTL_OPTIONS_SECONDS,
+} from "../messages/service.js";
 import { notifyUser } from "../realtime/index.js";
 
 const changeErrorStatus = {
@@ -88,9 +93,9 @@ export async function conversationRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const { before_seq, limit = 50 } = request.query;
-      const messages = await listMessages(request.userId, request.params.id, before_seq, limit);
-      if (!messages) return reply.code(404).send({ error: "conversation_not_found" });
-      return { messages };
+      const page = await listMessages(request.userId, request.params.id, before_seq, limit);
+      if (!page) return reply.code(404).send({ error: "conversation_not_found" });
+      return page;
     },
   );
 
@@ -134,5 +139,39 @@ export async function conversationRoutes(app: FastifyInstance) {
     { schema: { params: messageParams } },
     (request, reply) =>
       applyChange(request.userId, request.params.id, request.params.seq, null, reply),
+  );
+
+  // Turn auto-delete on or off for messages sent from now on.
+  app.put<{ Params: { id: string }; Body: { ttl_seconds: number | null } }>(
+    "/conversations/:id/ttl",
+    {
+      schema: {
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string", format: "uuid" } },
+        },
+        body: {
+          type: "object",
+          required: ["ttl_seconds"],
+          additionalProperties: false,
+          properties: { ttl_seconds: { enum: [...TTL_OPTIONS_SECONDS, null] } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const result = await setMessageTtl(request.userId, id, request.body.ttl_seconds);
+      if (!result.ok) return reply.code(404).send({ error: result.reason });
+
+      if (result.changed) {
+        for (const memberId of result.memberIds) {
+          const view = await getConversationForUser(memberId, id);
+          if (view) notifyUser(memberId, { type: "conversation.updated", conversation: view });
+          notifyUser(memberId, { type: "message.new", message: result.notice });
+        }
+      }
+      return getConversationForUser(request.userId, id);
+    },
   );
 }

@@ -10,6 +10,7 @@ import {
   type ChatDb,
 } from '../lib/db'
 import { changeMessage } from '../lib/edits'
+import { purgeExpired } from '../lib/expiry'
 import { loadOlderMessages } from '../lib/history'
 import { Outbox } from '../lib/outbox'
 import { Receipts } from '../lib/receipts'
@@ -20,13 +21,16 @@ import { supabase } from '../lib/supabase'
 import { Brand } from '../ui/Brand'
 import { Clock } from '../ui/Clock'
 import { Icon } from '../ui/Icon'
-import type { Conversation, Message, Profile, ServerMessage } from '../lib/types'
+import type { Conversation, Message, MessagePage, Profile } from '../lib/types'
 import { AddPeerScreen } from '../invites/AddPeerScreen'
 import { IdentityScreen } from '../profile/IdentityScreen'
 import { UserSearch } from '../users/UserSearch'
 import { ComposeScreen, type Recipient } from './ComposeScreen'
 import { ConversationList } from './ConversationList'
 import { ConversationView } from './ConversationView'
+
+// How often local copies of expired messages are deleted (views hide them on time regardless).
+const PURGE_INTERVAL_MS = 5_000
 
 const getToken = async () => (await supabase.auth.getSession()).data.session?.access_token ?? null
 
@@ -122,6 +126,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
           await putConversations(db, [event.conversation])
           break
         case 'conversation.new':
+        case 'conversation.updated':
           await putConversations(db, [event.conversation])
           break
         case 'receipt.update':
@@ -173,6 +178,14 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
     touchConversation,
   ])
 
+  // Auto-delete: remove expired messages from the local DB too, not just from view.
+  useEffect(() => {
+    const purge = () => void purgeExpired(db).catch(() => {})
+    purge()
+    const timer = setInterval(purge, PURGE_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [db])
+
   // Leaving a conversation (or signing out) stops any "typing" we announced there.
   useEffect(() => {
     if (!selectedId) return
@@ -183,13 +196,13 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
   // this session. Cached messages show immediately in the meantime.
   useEffect(() => {
     if (!selectedId || loaded[selectedId]) return
-    api<{ messages: ServerMessage[] }>(`/conversations/${selectedId}/messages`)
-      .then(async ({ messages }) => {
+    api<MessagePage>(`/conversations/${selectedId}/messages`)
+      .then(async ({ messages, has_more, up_to_seq }) => {
         await putServerMessages(db, messages)
-        if (messages.length) {
-          const seqs = messages.map((m) => m.seq)
-          await advanceCursor(db, selectedId, Math.min(...seqs), Math.max(...seqs), true)
-        }
+        // The page covers everything up to up_to_seq (gaps expired), and from
+        // its first message, or from seq 1 if nothing older is left.
+        const from = has_more ? Math.min(...messages.map((m) => m.seq)) : 1
+        await advanceCursor(db, selectedId, from, up_to_seq ?? 0, true)
         setLoaded((prev) => ({ ...prev, [selectedId]: true }))
         const peerSeqs = messages.filter((m) => m.sender_id !== profile.id).map((m) => m.seq)
         if (peerSeqs.length) receipts.markDelivered(selectedId, Math.max(...peerSeqs))
@@ -251,6 +264,15 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
     await db.conversations.update(conversationId, { last_message_at: now })
   }
 
+  /** Turns auto-delete on (seconds) or off (null) for this conversation's new messages. */
+  async function setMessageTtl(conversationId: string, ttlSeconds: number | null) {
+    const conversation = await api<Conversation>(`/conversations/${conversationId}/ttl`, {
+      method: 'PUT',
+      body: JSON.stringify({ ttl_seconds: ttlSeconds }),
+    })
+    await putConversations(db, [conversation])
+  }
+
   const markRead = useCallback(
     (seq: number) => {
       if (!selectedId) return
@@ -262,7 +284,9 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
 
   const loadOlder = useCallback(
     (beforeSeq: number) =>
-      selectedId ? loadOlderMessages(db, selectedId, beforeSeq) : Promise.resolve(0),
+      selectedId
+        ? loadOlderMessages(db, selectedId, beforeSeq)
+        : Promise.resolve({ count: 0, hasMore: false }),
     [db, selectedId],
   )
 
@@ -422,6 +446,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
             onRetry={(m) => void outbox.retry(m.client_msg_id)}
             onEdit={(m, body) => changeMessage(db, m, body)}
             onDelete={(m) => changeMessage(db, m, null)}
+            onSetTtl={(ttl) => setMessageTtl(selected.id, ttl)}
             onRead={markRead}
             onLoadOlder={loadOlder}
           />

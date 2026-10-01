@@ -29,6 +29,7 @@ function ack(clientMsgId: string, seq: number) {
     conversation_id: 'conv-1',
     seq,
     created_at: '2026-01-01T00:01:00.000Z',
+    expires_at: null,
   }
 }
 
