@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useEffectEvent, useState, type FormEvent } from 'react'
 import { api } from '../lib/api'
 import { inviteErrorMessage } from '../lib/invites'
 import type { ChatSocket } from '../lib/socket'
@@ -81,15 +81,17 @@ function SharePanel({
   }, [generation])
 
   const code = invite?.code
+  // An effect event: a new onJoined each render mustn't resubscribe to the socket.
+  const joined = useEffectEvent(onJoined)
   useEffect(() => {
     if (!code) return
     const off = socket.onEvent((event) => {
-      if (event.type === 'invite.redeemed' && event.code === code) onJoined(event.conversation)
+      if (event.type === 'invite.redeemed' && event.code === code) joined(event.conversation)
     })
     return () => {
       off()
     }
-  }, [socket, code, onJoined])
+  }, [socket, code])
 
   // Tick the countdown once a second until the code expires.
   useEffect(() => {
