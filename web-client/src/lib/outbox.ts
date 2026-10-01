@@ -114,6 +114,7 @@ export class Outbox {
     await this.db.messages.update([this.userId, ack.client_msg_id], {
       seq: ack.seq,
       created_at: ack.created_at,
+      expires_at: ack.expires_at,
       status: 'sent',
     })
   }

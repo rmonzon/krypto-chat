@@ -106,7 +106,7 @@ describe('compareMessages', () => {
 
 describe('compareConversations', () => {
   it('puts the most recently active first, falling back to creation time', () => {
-    const base = { last_seq: 0, last_change_seq: 0, peer: { id: 'p', username: 'p', display_name: 'P' }, peer_delivered_up_to_seq: 0, peer_read_up_to_seq: 0, my_read_up_to_seq: 0 }
+    const base = { last_seq: 0, last_change_seq: 0, message_ttl_seconds: null, peer: { id: 'p', username: 'p', display_name: 'P' }, peer_delivered_up_to_seq: 0, peer_read_up_to_seq: 0, my_read_up_to_seq: 0 }
     const oldButActive: Conversation = { ...base, id: 'a', created_at: '2026-01-01T00:00:00Z', last_message_at: '2026-01-05T00:00:00Z' }
     const newQuiet: Conversation = { ...base, id: 'b', created_at: '2026-01-03T00:00:00Z', last_message_at: null }
     const oldQuiet: Conversation = { ...base, id: 'c', created_at: '2026-01-02T00:00:00Z', last_message_at: null }

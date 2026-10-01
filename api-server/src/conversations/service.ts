@@ -6,6 +6,8 @@ export type ConversationDto = {
   last_seq: number;
   /** Counts edits/deletes in this conversation; see messages.change_seq. */
   last_change_seq: number;
+  /** Auto-delete: new messages expire this long after they're sent; null when off. */
+  message_ttl_seconds: number | null;
   created_at: Date;
   last_message_at: Date | null;
   peer: { id: string; username: string; display_name: string };
@@ -20,6 +22,7 @@ type ConversationRow = {
   id: string;
   last_seq: string; // bigint comes back as a string
   last_change_seq: string;
+  message_ttl_seconds: number | null;
   created_at: Date;
   last_message_at: Date | null;
   peer_id: string;
@@ -32,7 +35,7 @@ type ConversationRow = {
 
 // Conversations as seen by one member: the other member is the "peer".
 const selectConversations = `
-  select c.id, c.last_seq, c.last_change_seq, c.created_at, c.last_message_at,
+  select c.id, c.last_seq, c.last_change_seq, c.message_ttl_seconds, c.created_at, c.last_message_at,
          p.id as peer_id, p.username as peer_username, p.display_name as peer_display_name,
          other.delivered_up_to_seq as peer_delivered_up_to_seq,
          other.read_up_to_seq as peer_read_up_to_seq,
@@ -48,6 +51,7 @@ function toConversation(row: ConversationRow): ConversationDto {
     id: row.id,
     last_seq: Number(row.last_seq),
     last_change_seq: Number(row.last_change_seq),
+    message_ttl_seconds: row.message_ttl_seconds,
     created_at: row.created_at,
     last_message_at: row.last_message_at,
     peer: { id: row.peer_id, username: row.peer_username, display_name: row.peer_display_name },

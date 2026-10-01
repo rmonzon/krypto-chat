@@ -12,6 +12,7 @@ const conversation: Conversation = {
   id: 'conv-1',
   last_seq: 3,
   last_change_seq: 0,
+  message_ttl_seconds: null,
   created_at: '2026-01-01T00:00:00Z',
   last_message_at: '2026-01-01T00:05:00Z',
   peer: { id: 'peer', username: 'peer', display_name: 'Peer' },
@@ -45,7 +46,9 @@ describe('Syncer', () => {
         serverMessage({ seq: 2, sender_id: 'peer' }),
         serverMessage({ seq: 3, sender_id: 'me' }),
       ],
-      changes: [], has_more: false,
+      changes: [],
+      synced_up_to: { 'conv-1': 3 },
+      has_more: false,
     })
 
     await syncer.run()
@@ -65,9 +68,17 @@ describe('Syncer', () => {
       {
         conversations: [conversation],
         messages: [serverMessage({ seq: 11 }), serverMessage({ seq: 12 })],
-        changes: [], has_more: true,
+        changes: [],
+        synced_up_to: { 'conv-1': 12 },
+        has_more: true,
       },
-      { conversations: [conversation], messages: [serverMessage({ seq: 13 })], changes: [], has_more: false },
+      {
+        conversations: [conversation],
+        messages: [serverMessage({ seq: 13 })],
+        changes: [],
+        synced_up_to: { 'conv-1': 13 },
+        has_more: false,
+      },
     )
 
     await syncer.run()
@@ -92,6 +103,7 @@ describe('Syncer', () => {
         serverMessage({ seq: 1, change_seq: 2 }), // not loaded locally: skipped
         { ...stored, body: 'hello', edited_at: '2026-01-01T00:01:00Z', change_seq: 3 },
       ],
+      synced_up_to: { 'conv-1': 3 },
       has_more: false,
     })
 
@@ -105,9 +117,28 @@ describe('Syncer', () => {
     expect((await db.change_cursors.get('conv-2'))?.seq).toBe(4)
   })
 
+  it('moves cursors over expired gaps to where the server says it synced up to', async () => {
+    const { db, syncer } = setup()
+    await db.cursors.put({ conversation_id: 'conv-1', seq: 10 })
+    const allExpired = { ...conversation, id: 'conv-2', last_seq: 7 }
+    // 11-19 expired while offline; conv-2 has no cursor and nothing left.
+    respond({
+      conversations: [conversation, allExpired],
+      messages: [serverMessage({ seq: 20 })],
+      changes: [],
+      synced_up_to: { 'conv-1': 20, 'conv-2': 7 },
+      has_more: false,
+    })
+
+    await syncer.run()
+
+    expect((await db.cursors.get('conv-1'))?.seq).toBe(20)
+    expect((await db.cursors.get('conv-2'))?.seq).toBe(7)
+  })
+
   it('collapses overlapping runs into one follow-up sync', async () => {
     const { syncer } = setup()
-    apiMock.mockResolvedValue({ conversations: [], messages: [], changes: [], has_more: false })
+    apiMock.mockResolvedValue({ conversations: [], messages: [], changes: [], synced_up_to: {}, has_more: false })
 
     await Promise.all([syncer.run(), syncer.run(), syncer.run()])
 
@@ -119,7 +150,7 @@ describe('Syncer', () => {
     apiMock.mockRejectedValueOnce(new Error('offline'))
     await expect(syncer.run()).resolves.toBeUndefined()
 
-    respond({ conversations: [], messages: [], changes: [], has_more: false })
+    respond({ conversations: [], messages: [], changes: [], synced_up_to: {}, has_more: false })
     await syncer.run()
     expect(apiMock).toHaveBeenCalledTimes(2)
   })

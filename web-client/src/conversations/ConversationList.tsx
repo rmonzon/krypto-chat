@@ -1,8 +1,9 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import type { ChatDb } from '../lib/db'
+import { ttlNotice, ttlNoticeText } from '../lib/expiry'
 import { summarizeConversations } from '../lib/summary'
 import { formatListTime } from '../lib/time'
-import type { Conversation } from '../lib/types'
+import type { Conversation, Message } from '../lib/types'
 import { Avatar } from '../ui/Avatar'
 
 type Props = {
@@ -79,7 +80,7 @@ export function ConversationList({
                   ) : last ? (
                     <>
                       {last.sender_id === myId && <span className="prev-mine">› </span>}
-                      {last.deleted_at ? <span className="prev-deleted">message deleted</span> : last.body}
+                      {previewText(last)}
                     </>
                   ) : (
                     <span className="mono-dim">@{c.peer.username}</span>
@@ -106,4 +107,11 @@ export function ConversationList({
 function badgeText(count: number, lowerBound = false) {
   if (count > 99) return '99+'
   return lowerBound ? `${count}+` : String(count)
+}
+
+function previewText(m: Message) {
+  const ttl = ttlNotice(m)
+  if (ttl !== undefined) return <span className="prev-deleted">{ttlNoticeText(ttl)}</span>
+  if (m.deleted_at) return <span className="prev-deleted">message deleted</span>
+  return m.body
 }

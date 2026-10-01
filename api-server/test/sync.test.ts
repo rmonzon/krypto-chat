@@ -77,7 +77,13 @@ describe("POST /sync", () => {
     await insertMessages(alice.id, id, 2);
 
     const res = await request("POST", "/sync", { token: eve.token, body: { cursors: { [id]: 0 } } });
-    expect(res.body).toEqual({ conversations: [], messages: [], changes: [], has_more: false });
+    expect(res.body).toEqual({
+      conversations: [],
+      messages: [],
+      changes: [],
+      synced_up_to: {},
+      has_more: false,
+    });
 
     const bad = await request("POST", "/sync", {
       token: eve.token,

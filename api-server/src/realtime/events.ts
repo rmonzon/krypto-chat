@@ -10,11 +10,14 @@ export type ServerEvent =
       conversation_id: string;
       seq: number;
       created_at: Date;
+      expires_at: Date | null;
     }
   | { type: "message.new"; message: MessageDto }
   /** A message was edited or deleted (its current state). */
   | { type: "message.updated"; message: MessageDto }
   | { type: "conversation.new"; conversation: ConversationDto }
+  /** Conversation settings changed (e.g. auto-delete); the recipient's own view. */
+  | { type: "conversation.updated"; conversation: ConversationDto }
   | {
       type: "receipt.update";
       conversation_id: string;

@@ -1203,6 +1203,111 @@ button.msg-status.failed:hover {
   color: var(--err);
 }
 
+/* auto-delete */
+.thread-ttl {
+  color: var(--green);
+}
+
+.ttl-control {
+  position: relative;
+  flex: none;
+}
+
+.icon-btn.ttl-on {
+  width: auto;
+  gap: 4px;
+  padding: 0 9px;
+  color: var(--green);
+  border-color: var(--line);
+  background: var(--panel);
+}
+
+.ttl-short {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.ttl-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10;
+  width: 230px;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.ttl-menu-title,
+.ttl-menu-note {
+  margin: 4px 8px 6px;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.ttl-menu-title {
+  text-transform: uppercase;
+}
+
+.ttl-menu-note {
+  margin-top: 8px;
+  letter-spacing: 0.02em;
+  line-height: 1.45;
+}
+
+.ttl-option {
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 8px;
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--textdim);
+  cursor: pointer;
+}
+
+.ttl-option:hover,
+.ttl-option:focus-visible {
+  outline: none;
+  background: var(--panel2);
+  color: var(--text);
+}
+
+.ttl-option.current {
+  color: var(--green);
+}
+
+.ttl-option.current::after {
+  content: '  ●';
+  font-size: 9px;
+}
+
+.msg-expiry {
+  display: inline-flex;
+  align-self: center;
+  color: var(--muted);
+}
+
+.thread-notice {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  font-size: 11px;
+  color: var(--textdim);
+  text-align: center;
+}
+
 /* typing indicator */
 .typing-line {
   display: inline-flex;

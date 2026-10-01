@@ -55,6 +55,7 @@ export function serverMessage(overrides: Partial<ServerMessage> = {}): ServerMes
     edited_at: null,
     deleted_at: null,
     change_seq: null,
+    expires_at: null,
     ...overrides,
   }
 }
@@ -101,6 +102,7 @@ export function conversation(overrides: Partial<Conversation> = {}): Conversatio
     peer: { id: 'peer', username: 'peer', display_name: 'Peer' },
     last_seq: 0,
     last_change_seq: 0,
+    message_ttl_seconds: null,
     created_at: '2026-01-01T00:00:00.000Z',
     last_message_at: null,
     peer_delivered_up_to_seq: 0,
