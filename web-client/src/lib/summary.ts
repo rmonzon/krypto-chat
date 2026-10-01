@@ -2,7 +2,7 @@ import { compareMessages } from './db'
 import { isExpired, ttlNotice } from './expiry'
 import type { Conversation, Message } from './types'
 
-export type ConversationSummary = {
+type ConversationSummary = {
   /** Latest locally stored message that hasn't expired, for the preview line. */
   latest?: Message
   /**

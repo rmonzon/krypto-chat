@@ -43,7 +43,7 @@ export type ServerMessage = {
 /** Fields the server sets; missing on pending messages (expires_at arrives with the ack). */
 type ChangeFields = 'edited_at' | 'deleted_at' | 'change_seq' | 'expires_at'
 
-export type MessageStatus = 'sending' | 'sent' | 'failed'
+type MessageStatus = 'sending' | 'sent' | 'failed'
 
 /** A message as the client tracks it; seq is null until the server acks it. */
 export type Message = Omit<ServerMessage, 'id' | 'seq' | ChangeFields> &

@@ -42,14 +42,14 @@ function toMessage(row: MessageRow): MessageDto {
 }
 
 /** How long after sending a message its sender can still edit or delete it. */
-export const EDIT_WINDOW_MS = 15 * 60 * 1000;
+const EDIT_WINDOW_MS = 15 * 60 * 1000;
 
 /**
  * Content type of the notice posted when someone changes the auto-delete
  * timer; body is {"ttl_seconds": n | null}. Clients can't send this prefix.
  */
 export const SYSTEM_CONTENT_PREFIX = "application/vnd.krypto-chat.";
-export const TTL_NOTICE_CONTENT_TYPE = `${SYSTEM_CONTENT_PREFIX}ttl+json`;
+const TTL_NOTICE_CONTENT_TYPE = `${SYSTEM_CONTENT_PREFIX}ttl+json`;
 
 /**
  * Appends a message with the conversation's next seq, expiring per its
@@ -92,7 +92,7 @@ export type SendMessageInput = {
   body: string;
 };
 
-export type SendMessageResult =
+type SendMessageResult =
   | { ok: true; message: MessageDto; duplicate: boolean; memberIds: string[] }
   | { ok: false; reason: "not_a_member" | "duplicate_client_msg_id" };
 
@@ -137,7 +137,7 @@ export async function sendMessage(
 /** Auto-delete timers clients can pick: 5 minutes to 30 days. */
 export const TTL_OPTIONS_SECONDS = [300, 3600, 86_400, 604_800, 2_592_000];
 
-export type SetTtlResult =
+type SetTtlResult =
   | { ok: true; changed: false }
   | { ok: true; changed: true; notice: MessageDto; memberIds: string[] }
   | { ok: false; reason: "conversation_not_found" };
@@ -213,7 +213,7 @@ export async function latestMessages(conversationId: string, limit: number): Pro
   return rows.map(toMessage).reverse();
 }
 
-export type MessagePage = {
+type MessagePage = {
   messages: MessageDto[];
   /** Whether there are messages before this page. */
   has_more: boolean;
@@ -259,7 +259,7 @@ export async function listMessages(
   return page;
 }
 
-export type ChangeMessageResult =
+type ChangeMessageResult =
   | { ok: true; message: MessageDto; memberIds: string[] }
   | {
       ok: false;

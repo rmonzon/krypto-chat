@@ -8,7 +8,7 @@ const TICK_MS = 70
  * Decorative: renders text as shimmering random glyphs, keeping whitespace so
  * the shape of the text survives. Not encryption, just the look of it.
  */
-export function Scramble({ text, className }: { text: string; className?: string }) {
+export function Scramble({ text }: { text: string }) {
   // A pool of glyphs, indexed by character position, that churns a little each tick.
   const [pool, setPool] = useState(() => Array.from({ length: POOL_SIZE }, randGlyph))
 
@@ -22,7 +22,7 @@ export function Scramble({ text, className }: { text: string; className?: string
 
   const shown = Array.from(text, (ch, i) => (/\s/.test(ch) ? ch : pool[i % POOL_SIZE])).join('')
   return (
-    <span className={'scramble ' + (className ?? '')} aria-hidden="true">
+    <span className="scramble" aria-hidden="true">
       {shown}
     </span>
   )

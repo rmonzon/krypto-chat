@@ -3,9 +3,10 @@ import { randGlyph } from './glyphs'
 
 const FONT_PX = 16
 const FRAME_MS = 55
+const COLOR = '#00ff9c'
 
 // Decorative falling-glyph canvas that fills its parent. Skipped under reduced motion.
-export function MatrixRain({ color = '#00ff9c', opacity = 0.5 }: { color?: string; opacity?: number }) {
+export function MatrixRain({ opacity = 0.5 }: { opacity?: number }) {
   const ref = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -33,7 +34,7 @@ export function MatrixRain({ color = '#00ff9c', opacity = 0.5 }: { color?: strin
       ctx.fillStyle = fade ? 'rgba(3,7,5,0.16)' : 'rgba(3,7,5,1)'
       ctx.fillRect(0, 0, w, h)
       ctx.font = FONT_PX + 'px ui-monospace, monospace'
-      ctx.fillStyle = color
+      ctx.fillStyle = COLOR
       drops.forEach((d, i) => {
         const x = i * FONT_PX
         const y = d * FONT_PX
@@ -69,7 +70,7 @@ export function MatrixRain({ color = '#00ff9c', opacity = 0.5 }: { color?: strin
       cancelAnimationFrame(raf)
       ro.disconnect()
     }
-  }, [color])
+  }, [])
 
   return <canvas ref={ref} className="matrix-rain" style={{ opacity }} aria-hidden="true" />
 }

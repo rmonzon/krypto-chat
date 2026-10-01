@@ -16,7 +16,7 @@ type Ack = Extract<ServerEvent, { type: 'message.ack' }>
 type ErrorEvent = Extract<ServerEvent, { type: 'error' }>
 type Locks = Pick<LockManager, 'request'>
 
-export type OutboxOptions = {
+type OutboxOptions = {
   /** Web Locks, to elect one sending tab per user. null: this tab always sends. */
   locks?: Locks | null
   now?: () => number

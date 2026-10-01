@@ -124,7 +124,7 @@ describe("message.send", () => {
   });
 
   it("rejects non-members, reused ids, and malformed messages", async () => {
-    const { alice, bob, conversationId, aliceSocket, bobSocket } = await setup();
+    const { alice, conversationId, aliceSocket, bobSocket } = await setup();
     const eve = await createUser("eve");
     const eveSocket = await TestSocket.connect(eve);
 
@@ -168,7 +168,6 @@ describe("message.send", () => {
     expect(await aliceSocket.next("error")).toMatchObject({ reason: "unknown_event" });
 
     await bobSocket.expectNone("error");
-    void bob;
     for (const s of [aliceSocket, bobSocket, eveSocket]) s.close();
   });
 });

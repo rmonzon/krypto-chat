@@ -126,7 +126,7 @@ export async function conversationMemberIds(conversationId: string): Promise<str
 
 export type ReceiptKind = "delivered" | "read";
 
-export type ReceiptResult = {
+type ReceiptResult = {
   memberIds: string[];
   delivered_up_to_seq: number;
   read_up_to_seq: number;
