@@ -79,7 +79,7 @@ export function ConversationList({
                   ) : last ? (
                     <>
                       {last.sender_id === myId && <span className="prev-mine">› </span>}
-                      {last.body}
+                      {last.deleted_at ? <span className="prev-deleted">message deleted</span> : last.body}
                     </>
                   ) : (
                     <span className="mono-dim">@{c.peer.username}</span>

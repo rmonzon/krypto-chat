@@ -8,6 +8,8 @@ export type ChatDb = Dexie & {
   meta: EntityTable<{ key: 'profile'; value: Profile }, 'key'>
   /** Per conversation: every message up to this seq is stored locally (see advanceCursor). */
   cursors: EntityTable<{ conversation_id: string; seq: number }, 'conversation_id'>
+  /** Per conversation: every edit/delete up to this change_seq is applied locally. */
+  change_cursors: EntityTable<{ conversation_id: string; seq: number }, 'conversation_id'>
 }
 
 const dbs = new Map<string, ChatDb>()
@@ -23,6 +25,7 @@ export function getChatDb(userId: string): ChatDb {
       meta: 'key',
     })
     db.version(2).stores({ cursors: 'conversation_id' })
+    db.version(3).stores({ change_cursors: 'conversation_id' })
     dbs.set(userId, db)
   }
   return db
@@ -37,6 +40,37 @@ export async function deleteChatDb(userId: string) {
 
 export function fromServer({ id: _id, ...m }: ServerMessage): Message {
   return { ...m, status: 'sent' }
+}
+
+/**
+ * Stores messages from the server, skipping any whose local copy reflects a
+ * later edit/delete (a page fetched before a live change must not undo it).
+ * With onlyExisting, only updates messages already stored: used for changes,
+ * which may be for older history that isn't loaded (and must not leave holes).
+ */
+export async function putServerMessages(
+  db: ChatDb,
+  incoming: ServerMessage[],
+  { onlyExisting = false } = {},
+) {
+  if (!incoming.length) return
+  await db.transaction('rw', db.messages, async () => {
+    const local = await db.messages.bulkGet(incoming.map((m) => [m.sender_id, m.client_msg_id]))
+    const newer = incoming.filter((m, i) => {
+      const existing = local[i]
+      if (!existing) return !onlyExisting
+      return (m.change_seq ?? 0) >= (existing.change_seq ?? 0)
+    })
+    await db.messages.bulkPut(newer.map(fromServer))
+  })
+}
+
+/** Moves the conversation's change cursor forward (never back). */
+export async function advanceChangeCursor(db: ChatDb, conversationId: string, seq: number) {
+  await db.transaction('rw', db.change_cursors, async () => {
+    const current = (await db.change_cursors.get(conversationId))?.seq ?? 0
+    if (seq > current) await db.change_cursors.put({ conversation_id: conversationId, seq })
+  })
 }
 
 /** Acked messages in seq order, then pending ones in the order they were written. */

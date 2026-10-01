@@ -8,6 +8,8 @@ export type Conversation = {
   id: string
   peer: Profile
   last_seq: number
+  /** Counts edits/deletes in this conversation; see ServerMessage.change_seq. */
+  last_change_seq: number
   created_at: string
   last_message_at: string | null
   /** How far the peer has received / read, as conversation seqs. */
@@ -27,12 +29,21 @@ export type ServerMessage = {
   content_type: string
   body: string
   created_at: string
+  edited_at: string | null
+  /** Set when the sender deleted it; body is then empty. */
+  deleted_at: string | null
+  /** The conversation change (edit/delete) that last touched it; null if never changed. */
+  change_seq: number | null
 }
+
+/** Fields that only change through edits/deletes; missing on pending messages. */
+type ChangeFields = 'edited_at' | 'deleted_at' | 'change_seq'
 
 export type MessageStatus = 'sending' | 'sent' | 'failed'
 
 /** A message as the client tracks it; seq is null until the server acks it. */
-export type Message = Omit<ServerMessage, 'id' | 'seq'> & {
+export type Message = Omit<ServerMessage, 'id' | 'seq' | ChangeFields> &
+  Partial<Pick<ServerMessage, ChangeFields>> & {
   seq: number | null
   status: MessageStatus
   /** Transient server errors so far; the outbox gives up after a few. */
@@ -60,6 +71,8 @@ export type ServerEvent =
       created_at: string
     }
   | { type: 'message.new'; message: ServerMessage }
+  /** A message was edited or deleted (its current state). */
+  | { type: 'message.updated'; message: ServerMessage }
   | { type: 'conversation.new'; conversation: Conversation }
   | {
       type: 'receipt.update'
@@ -77,5 +90,7 @@ export type Invite = { code: string; expires_at: string }
 export type SyncResponse = {
   conversations: Conversation[]
   messages: ServerMessage[]
+  /** Current state of messages edited/deleted after the change cursors. */
+  changes: ServerMessage[]
   has_more: boolean
 }

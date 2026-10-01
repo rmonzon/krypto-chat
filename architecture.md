@@ -12,6 +12,7 @@
 - Message delivery states: `sending`, `sent`, `delivered`, `read`, `failed`
 - Sync messages on reconnect
 - Unread counts and a typing indicator
+- Edit or delete your own messages for 15 minutes after sending
 
 End-to-end encryption (E2EE) is on the roadmap, so the protocol treats message bodies as opaque data from day one.
 
@@ -59,9 +60,9 @@ krypto-chat/
 
 ## Data model
 - `profiles(id → auth.users.id, username UNIQUE, display_name, created_at)`
-- `conversations(id, direct_key UNIQUE, created_at, last_seq, last_message_at)`: `direct_key` is the two member IDs, sorted and joined, so a 1:1 conversation can't be created twice
+- `conversations(id, direct_key UNIQUE, created_at, last_seq, last_message_at, last_change_seq)`: `direct_key` is the two member IDs, sorted and joined, so a 1:1 conversation can't be created twice
 - `conversation_members(conversation_id, user_id, delivered_up_to_seq, read_up_to_seq)`
-- `messages(id, conversation_id, seq, sender_id, client_msg_id, content_type, body, created_at)`: unique on `(conversation_id, seq)` and on `(sender_id, client_msg_id)`, which dedupes retries per sender
+- `messages(id, conversation_id, seq, sender_id, client_msg_id, content_type, body, created_at, edited_at, deleted_at, change_seq)`: unique on `(conversation_id, seq)` and on `(sender_id, client_msg_id)`, which dedupes retries per sender. `change_seq` is the edit/delete that last touched the message (see Key mechanics)
 - `invites(code PK, creator_id → profiles NULL, created_at, expires_at, redeemed_by → profiles, redeemed_at)`: one-time codes like `KC-7Q2M-X9FA-3LDP` (60 random bits, no 0/O/1/I). A null `creator_id` is an admin invite from `pnpm invite:create`
 
 ## Key mechanics
@@ -82,6 +83,7 @@ krypto-chat/
 8. **Invite-only sign-up**: Supabase can't know about invites, so the gate is profile creation: nothing in the app works without a profile. Sign-up is two steps: the form first asks only for the code (`POST /invites/check`); once it's accepted, it collects email, password, username and display name together, re-checks the code along with the username, and creates the Supabase account with `invite_code`, `username` and `display_name` in its metadata, so they survive confirming the email on another device. On first sign-in the client creates the profile from that metadata without another screen; the profile setup screen only appears if that fails (e.g. the username was taken in the meantime) or for older accounts without the details. `POST /profiles` claims the code in the same transaction that creates the profile (no valid code, no profile) and opens a conversation with the inviter, if any. Codes last 10 minutes, and a code counts if it's valid now **or was valid when the Supabase account was created** (`auth.users.created_at`), so a slow email confirmation doesn't lock anyone out. The same codes also connect two existing users (`POST /invites/redeem`). Making a new code doesn't revoke older ones, since an invitee may be between sign-up and profile setup.
 9. **Unread counts**: `GET /conversations` includes the caller's own `my_read_up_to_seq`. Clients count locally stored peer messages above it (showing `N+` when older unread history isn't loaded yet), advance it optimistically when they send `receipt.read`, and never let a server snapshot move any watermark backwards.
 10. **Typing**: while the draft is non-empty the client sends `typing {typing: true}` at most every 3s, and `typing: false` when the draft is cleared, sent, or the conversation is left. The server only relays it to the other member (nothing is stored). Receivers hide the indicator on `false`, when that person's message arrives, after 6s without a refresh, or on disconnect.
+11. **Edit and delete**: senders can edit or delete their own messages for 15 minutes after sending (`EDIT_WINDOW_MS`, checked against the server's `created_at`), through REST while online. Edits and deletes don't go through the outbox, because a queued change could outlive the window. Deleting is "for everyone": the row stays as a tombstone (empty `body`, `deleted_at` set), so seqs stay gap-free. Each change takes the conversation's next `last_change_seq` (under the same row lock as sends) and stamps it on the message as `change_seq`. Clients keep a separate **change cursor** per conversation, since the seq cursor only covers new messages. `POST /sync` returns `changes` after it, which clients apply only to messages they already store (adding them would leave holes in history). History that isn't loaded yet arrives current when fetched. The client stores incoming messages only when their `change_seq` is at least the local one, so a page fetched before a live edit can't undo it. After a sync, the change cursor moves to the last change received, or to the snapshot's `last_change_seq` if none came back. Deleted messages don't count as unread.
 
 ## API (draft)
 ### REST
@@ -90,12 +92,14 @@ Every request except `/health` and `/invites/check` sends `Authorization: Bearer
 - `POST /profiles {username, display_name, invite_code?}`: create the caller's profile after sign-up, claiming an invite (from the body, else the account's `invite_code` metadata). `username` must match `^[a-z0-9_]{3,30}$`. Errors: 403 `invite_required`, 400 `invalid_code`, 404 `invite_not_found`, 410 `invite_used` / `invite_expired`, 409 `username_taken` / `profile_exists`. If the invite has a creator, it also opens their conversation and sends them `invite.redeemed`
 - `GET /users?q=`: search profiles by username prefix (case-insensitive, excludes the caller, max 20)
 - `POST /conversations {peer_id}`: creates the 1:1 conversation (201) or returns the existing one (200). Errors: 400 `cannot_message_self`, 403 `profile_required`, 404 `user_not_found`
-- `GET /conversations`: the caller's conversations, most recently active first, each as `{id, last_seq, created_at, last_message_at, peer: {id, username, display_name}, peer_delivered_up_to_seq, peer_read_up_to_seq, my_read_up_to_seq}`
+- `GET /conversations`: the caller's conversations, most recently active first, each as `{id, last_seq, last_change_seq, created_at, last_message_at, peer: {id, username, display_name}, peer_delivered_up_to_seq, peer_read_up_to_seq, my_read_up_to_seq}`
 - `GET /conversations/:id/messages?before_seq=&limit=50`: message history in ascending `seq` order (the latest page by default; `before_seq` pages backwards). 404 `conversation_not_found` if the caller isn't a member
+- `PATCH /conversations/:id/messages/:seq {body}`: edit one of the caller's messages. Returns `{message}` and sends `message.updated` to every member's sockets. Errors: 404 `message_not_found` (also when the caller isn't a member), 403 `not_your_message` / `edit_window_expired`, 409 `message_deleted`
+- `DELETE /conversations/:id/messages/:seq`: delete one of the caller's messages for everyone, leaving a tombstone. Same response and errors as the edit
 - `POST /invites`: a new one-time code for the caller, `{code, expires_at}` (10 minutes). 403 `profile_required`
 - `POST /invites/redeem {code}`: as an existing user, opens (201) or returns (200) the conversation with the code's creator, and sends them `invite.redeemed`. Errors: 400 `invalid_code` / `own_invite` / `signup_only_invite` (admin code), 404 `invite_not_found`, 410 `invite_used` / `invite_expired`
 - `POST /invites/check {code, username?}` (no auth): whether a code can be used to sign up and, only when it can, whether `username` is free. Returns `{code}` (normalized), the same code errors as redeem, or 400 `invalid_username` / 409 `username_taken`. Nothing is reserved
-- `POST /sync {cursors: {<conversation_id>: seq}}`: catch-up after (re)connecting. Returns `{conversations, messages, has_more}`: messages after each cursor (up to 100 per conversation), or the latest 50 for conversations with no cursor. `has_more` means call again with the advanced cursors
+- `POST /sync {cursors: {<conversation_id>: seq}, change_cursors?: {<conversation_id>: change_seq}}`: catch-up after (re)connecting. Returns `{conversations, messages, changes, has_more}`: messages after each cursor (up to 100 per conversation), or the latest 50 for conversations with no cursor. `changes` holds the current state of messages edited or deleted after each change cursor (a missing one means 0; up to 100 per conversation; only for conversations with a seq cursor). `has_more` means call again with the advanced cursors
 
 ### WebSocket events
 Browsers can't set headers on a WebSocket, and a token in the URL would end up in logs, so the client authenticates with its first message: `auth {token}`. The server replies `ready {user_id}`, or closes the socket with code `4401` if the token is invalid or doesn't arrive within 5s. Every event is a JSON object with a `type` field. The server handles each socket's events one at a time, in order, and pings every 30s to drop dead connections.
@@ -109,6 +113,7 @@ Browsers can't set headers on a WebSocket, and a token in the URL would end up i
   - `ready {user_id}`
   - `message.ack {client_msg_id, conversation_id, seq, created_at}`: sent to the socket that sent the message, including for retries of a message that's already stored
   - `message.new {message}`: sent to every member's other sockets. Not re-sent for a retry of an already stored message
+  - `message.updated {message}`: a message's current state after an edit or delete, sent to every member's sockets
   - `conversation.new {conversation}`: sent to the peer when a conversation is created
   - `receipt.update {conversation_id, user_id, delivered_up_to_seq, read_up_to_seq}`: sent to all members' other sockets when a watermark moves forward
   - `typing {conversation_id, user_id, typing}`: relayed to the other member only
