@@ -1,7 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import type { ChatDb } from '../lib/db'
 import { ttlNotice, ttlNoticeText } from '../lib/expiry'
-import { summarizeConversations } from '../lib/summary'
+import { loadSummaries } from '../lib/summary'
 import { formatListTime } from '../lib/time'
 import type { Conversation, Message } from '../lib/types'
 import { Avatar } from '../ui/Avatar'
@@ -28,11 +28,7 @@ export function ConversationList({
   onSelect,
 }: Props) {
   // Preview line and unread count per conversation, from the local DB.
-  const summaries = useLiveQuery(
-    async () =>
-      summarizeConversations(await db.conversations.toArray(), await db.messages.toArray(), myId),
-    [db, myId],
-  )
+  const summaries = useLiveQuery(() => loadSummaries(db, myId), [db, myId])
 
   const q = query.trim().toLowerCase()
   const visible = q

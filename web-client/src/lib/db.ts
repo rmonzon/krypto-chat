@@ -29,6 +29,12 @@ export function getChatDb(userId: string): ChatDb {
     db.version(4).stores({
       messages: '[sender_id+client_msg_id], conversation_id, status, expires_at',
     })
+    // [conversation_id+seq]: range reads within a conversation (unacked messages, with
+    // a null seq, aren't in it).
+    db.version(5).stores({
+      messages:
+        '[sender_id+client_msg_id], conversation_id, status, expires_at, [conversation_id+seq]',
+    })
     dbs.set(userId, db)
   }
   return db

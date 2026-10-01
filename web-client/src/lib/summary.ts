@@ -1,4 +1,5 @@
-import { compareMessages } from './db'
+import Dexie from 'dexie'
+import { compareMessages, msgKey, type ChatDb } from './db'
 import { isExpired, ttlNotice } from './expiry'
 import type { Conversation, Message } from './types'
 
@@ -52,4 +53,40 @@ export function summarizeConversations(
     })
   }
   return result
+}
+
+/**
+ * summarizeConversations for every stored conversation, reading only the
+ * messages it needs through indexes rather than the whole table: per
+ * conversation the oldest stored message, the latest one that hasn't
+ * expired, and those after my read watermark, plus pending messages (which
+ * have no seq yet). The list re-runs this on every change, so it shouldn't
+ * grow with history.
+ */
+export async function loadSummaries(
+  db: ChatDb,
+  myId: string,
+  now = Date.now(),
+): Promise<Map<string, ConversationSummary>> {
+  const conversations = await db.conversations.toArray()
+  const bySeq = (id: string, from: unknown = Dexie.minKey) =>
+    db.messages.where('[conversation_id+seq]').between([id, from], [id, Dexie.maxKey])
+  const pending = await db.messages.where('status').anyOf('sending', 'failed').toArray()
+  const perConversation = await Promise.all(
+    conversations.map(async (c) => {
+      const oldest = await bySeq(c.id).first()
+      const latest = await bySeq(c.id)
+        .reverse()
+        .filter((m) => !isExpired(m, now))
+        .first()
+      // undefined: cached by an older version; unread isn't counted then anyway.
+      const read = c.my_read_up_to_seq
+      const unread = read === undefined ? [] : await bySeq(c.id, read + 1).toArray()
+      return [oldest, latest, ...unread]
+    }),
+  )
+
+  const messages = new Map<string, Message>()
+  for (const m of [...pending, ...perConversation.flat()]) if (m) messages.set(msgKey(m), m)
+  return summarizeConversations(conversations, messages.values(), myId, now)
 }
