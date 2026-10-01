@@ -116,12 +116,32 @@ export async function getOrCreateDirectConversation(
 }
 
 /** Everyone in the conversation (empty if it doesn't exist). */
-export async function conversationMemberIds(conversationId: string): Promise<string[]> {
-  const { rows } = await pool.query<{ user_id: string }>(
+export async function conversationMemberIds(
+  conversationId: string,
+  db: pg.Pool | pg.PoolClient = pool,
+): Promise<string[]> {
+  const { rows } = await db.query<{ user_id: string }>(
     "select user_id from conversation_members where conversation_id = $1",
     [conversationId],
   );
   return rows.map((r) => r.user_id);
+}
+
+/**
+ * Inside a transaction: locks the conversation row, which serializes sends
+ * and changes in it (keeping seq and change_seq gap-free and in commit
+ * order), and returns its member ids. Undefined, without locking, if userId
+ * isn't a member.
+ */
+export async function lockConversationForMember(
+  client: pg.PoolClient,
+  conversationId: string,
+  userId: string,
+): Promise<string[] | undefined> {
+  const memberIds = await conversationMemberIds(conversationId, client);
+  if (!memberIds.includes(userId)) return undefined;
+  await client.query("select 1 from conversations where id = $1 for update", [conversationId]);
+  return memberIds;
 }
 
 export type ReceiptKind = "delivered" | "read";

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { lockConversationForMember } from "../conversations/service.js";
 import { pool, withTransaction } from "../db.js";
 
 export type MessageDto = {
@@ -105,18 +106,9 @@ export async function sendMessage(
   input: SendMessageInput,
 ): Promise<SendMessageResult> {
   return withTransaction(async (client) => {
-    const members = await client.query<{ user_id: string }>(
-      "select user_id from conversation_members where conversation_id = $1",
-      [input.conversation_id],
-    );
-    const memberIds = members.rows.map((r) => r.user_id);
-    if (!memberIds.includes(senderId)) return { ok: false, reason: "not_a_member" };
-
-    // Lock the conversation row: serializes sends in this conversation, which
-    // keeps seq gap-free and makes the duplicate check below race-free.
-    await client.query("select 1 from conversations where id = $1 for update", [
-      input.conversation_id,
-    ]);
+    // The row lock also makes the duplicate check below race-free.
+    const memberIds = await lockConversationForMember(client, input.conversation_id, senderId);
+    if (!memberIds) return { ok: false, reason: "not_a_member" };
 
     const existing = await client.query<MessageRow>(
       `select ${messageColumns} from messages where sender_id = $1 and client_msg_id = $2`,
@@ -153,15 +145,11 @@ export async function setMessageTtl(
   ttlSeconds: number | null,
 ): Promise<SetTtlResult> {
   return withTransaction(async (client) => {
-    const members = await client.query<{ user_id: string }>(
-      "select user_id from conversation_members where conversation_id = $1",
-      [conversationId],
-    );
-    const memberIds = members.rows.map((r) => r.user_id);
-    if (!memberIds.includes(userId)) return { ok: false, reason: "conversation_not_found" };
+    const memberIds = await lockConversationForMember(client, conversationId, userId);
+    if (!memberIds) return { ok: false, reason: "conversation_not_found" };
 
     const { rows } = await client.query<{ message_ttl_seconds: number | null }>(
-      "select message_ttl_seconds from conversations where id = $1 for update",
+      "select message_ttl_seconds from conversations where id = $1",
       [conversationId],
     );
     if (rows[0]!.message_ttl_seconds === ttlSeconds) return { ok: true, changed: false };
@@ -278,16 +266,9 @@ export async function changeMessage(
   newBody: string | null,
 ): Promise<ChangeMessageResult> {
   return withTransaction(async (client) => {
-    const members = await client.query<{ user_id: string }>(
-      "select user_id from conversation_members where conversation_id = $1",
-      [conversationId],
-    );
-    const memberIds = members.rows.map((r) => r.user_id);
+    const memberIds = await lockConversationForMember(client, conversationId, userId);
     // Same answer for "no such message" and "not your conversation", so ids don't leak.
-    if (!memberIds.includes(userId)) return { ok: false, reason: "message_not_found" };
-
-    // Serializes changes in this conversation, keeping change_seq in commit order.
-    await client.query("select 1 from conversations where id = $1 for update", [conversationId]);
+    if (!memberIds) return { ok: false, reason: "message_not_found" };
 
     const { rows: found } = await client.query<MessageRow>(
       `select ${messageColumns} from messages where conversation_id = $1 and seq = $2`,
