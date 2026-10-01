@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { createAuthUser, createUser, request, signToken, useTestServer } from "./helpers.js";
+import {
+  adminInvite,
+  createAuthUser,
+  createUser,
+  request,
+  signToken,
+  useTestServer,
+} from "./helpers.js";
 
 useTestServer();
 
@@ -35,7 +42,7 @@ describe("profiles", () => {
     const { id, token } = await createAuthUser();
     const created = await request("POST", "/profiles", {
       token,
-      body: { username: "alice", display_name: "  Alice  " },
+      body: { username: "alice", display_name: "  Alice  ", invite_code: await adminInvite() },
     });
     expect(created).toEqual({
       status: 201,
@@ -49,7 +56,7 @@ describe("profiles", () => {
     const other = await createAuthUser();
     const taken = await request("POST", "/profiles", {
       token: other.token,
-      body: { username: "alice", display_name: "Other" },
+      body: { username: "alice", display_name: "Other", invite_code: await adminInvite() },
     });
     expect(taken).toEqual({ status: 409, body: { error: "username_taken" } });
 

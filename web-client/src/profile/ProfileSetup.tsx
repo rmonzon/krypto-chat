@@ -1,15 +1,28 @@
 import { useState, type FormEvent } from 'react'
-import { api, ApiError } from '../lib/api'
+import { api } from '../lib/api'
+import { inviteErrorMessage } from '../lib/invites'
 import type { Profile } from '../lib/types'
 import { Brand } from '../ui/Brand'
 import { Icon } from '../ui/Icon'
 import { MatrixRain } from '../ui/MatrixRain'
 
-export function ProfileSetup({ onCreated }: { onCreated: (profile: Profile) => void }) {
-  const [username, setUsername] = useState('')
-  const [displayName, setDisplayName] = useState('')
+type Props = {
+  /** Details saved at sign-up, and why creating the profile from them failed. */
+  initial?: { inviteCode?: string; username?: string; displayName?: string; error?: string | null }
+  onCreated: (profile: Profile) => void
+}
+
+/**
+ * Fallback profile setup: normally the profile is created from the sign-up
+ * form's details. This shows when that failed (e.g. the username was taken in
+ * the meantime) or for accounts made before sign-up collected them.
+ */
+export function ProfileSetup({ initial = {}, onCreated }: Props) {
+  const [inviteCode, setInviteCode] = useState(initial.inviteCode ?? '')
+  const [username, setUsername] = useState(initial.username ?? '')
+  const [displayName, setDisplayName] = useState(initial.displayName ?? '')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(initial.error ?? null)
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -18,15 +31,15 @@ export function ProfileSetup({ onCreated }: { onCreated: (profile: Profile) => v
     try {
       const profile = await api<Profile>('/profiles', {
         method: 'POST',
-        body: JSON.stringify({ username, display_name: displayName.trim() }),
+        body: JSON.stringify({
+          username,
+          display_name: displayName.trim(),
+          invite_code: inviteCode,
+        }),
       })
       onCreated(profile)
     } catch (err) {
-      setError(
-        err instanceof ApiError && err.code === 'username_taken'
-          ? 'That username is taken.'
-          : 'Could not create your profile. Try again.',
-      )
+      setError(inviteErrorMessage(err) ?? 'Could not create your profile. Try again.')
       setBusy(false)
     }
   }
@@ -46,6 +59,24 @@ export function ProfileSetup({ onCreated }: { onCreated: (profile: Profile) => v
         </div>
 
         <form className={'lock-form ' + (error ? 'bad' : '')} onSubmit={handleSubmit}>
+          <label className="field-label" htmlFor="setup-invite">
+            Invite code
+          </label>
+          <div className="key-input">
+            <Icon name="ticket" size={16} className="ki-lead" />
+            <input
+              id="setup-invite"
+              className="invite-input"
+              placeholder="KC-XXXX-XXXX-XXXX"
+              required
+              maxLength={40}
+              spellCheck={false}
+              autoComplete="off"
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
+            />
+          </div>
+
           <label className="field-label" htmlFor="setup-username">
             Username
           </label>

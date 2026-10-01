@@ -10,7 +10,8 @@
     "migrate": "tsx --env-file=.env scripts/migrate.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "seed:messages": "tsx --env-file=.env scripts/seed-messages.ts"
+    "seed:messages": "tsx --env-file=.env scripts/seed-messages.ts",
+    "invite:create": "tsx --env-file=.env scripts/create-invite.ts"
   },
   "dependencies": {
     "@fastify/websocket": "^11.3.1",

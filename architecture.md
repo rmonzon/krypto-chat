@@ -3,12 +3,15 @@
 > Source of truth for system design. Update this file in place when the design changes.
 
 ## Scope (v1)
+- Invite-only sign-up: new users need a one-time invite code from an existing user (or the admin CLI)
+- Connect with someone through an invite code, without searching for them
 - Search for registered users
 - Create a 1:1 conversation with a user
 - Send and receive messages in real time
 - Send messages while offline
 - Message delivery states: `sending`, `sent`, `delivered`, `read`, `failed`
 - Sync messages on reconnect
+- Unread counts and a typing indicator
 
 End-to-end encryption (E2EE) is on the roadmap, so the protocol treats message bodies as opaque data from day one.
 
@@ -44,6 +47,7 @@ krypto-chat/
 
 ### Supabase
 - **Auth** handles sign-up, sign-in, password hashing, sessions and token refresh. To switch providers later, only JWT verification and the sign-in UI need to change.
+- **Sign-ups stay open at the Supabase level.** The invite requirement is enforced when the profile is created (see Key mechanics), so a Supabase account made without an invite exists but can't use the app.
 - **Postgres** is used as a plain managed database. `api-server` is the only thing that connects to it, through the session pooler. Avoid the transaction pooler (port 6543), which breaks prepared statements in most Node drivers.
 - **Realtime is not used.** Our WebSocket is the only real-time channel.
 - **Data API disabled:** nothing uses it (auth works without it), and turning it off keeps the public anon key from reaching chat data. As a backup layer, RLS is also enabled on every app table with no policies. `api-server` connects as the DB owner, which bypasses RLS.
@@ -58,6 +62,7 @@ krypto-chat/
 - `conversations(id, direct_key UNIQUE, created_at, last_seq, last_message_at)`: `direct_key` is the two member IDs, sorted and joined, so a 1:1 conversation can't be created twice
 - `conversation_members(conversation_id, user_id, delivered_up_to_seq, read_up_to_seq)`
 - `messages(id, conversation_id, seq, sender_id, client_msg_id, content_type, body, created_at)`: unique on `(conversation_id, seq)` and on `(sender_id, client_msg_id)`, which dedupes retries per sender
+- `invites(code PK, creator_id → profiles NULL, created_at, expires_at, redeemed_by → profiles, redeemed_at)`: one-time codes like `KC-7Q2M-X9FA-3LDP` (60 random bits, no 0/O/1/I). A null `creator_id` is an admin invite from `pnpm invite:create`
 
 ## Key mechanics
 1. **Client-generated `client_msg_id` (UUID)**: gives an instant local render, safe retries (the server dedupes on it), and a way to match server acks to local messages.
@@ -74,16 +79,22 @@ krypto-chat/
    | `failed` | The server rejected it (validation/auth) or retries ran out. The user can tap to retry. |
 6. **Reconnect sync**: every time the socket becomes ready, the client (a) resends its outbox and receipts, and (b) calls `POST /sync` with its **cursors**. A cursor is the seq up to which a conversation is stored locally with no gaps. It only advances over a range that connects to it: sync pages, the latest history page, or a live message/ack with exactly the next seq. That way a live message arriving right after a reconnect can't skip past messages missed while offline. The response holds all conversations (with current watermarks) plus the messages after each cursor. Conversations without a cursor get their latest page. Older history loads on demand as the user scrolls up (`GET /conversations/:id/messages?before_seq=<oldest local seq>`). Since seqs are gap-free from 1, an oldest local seq above 1 means there's more to load. The client repeats while `has_more` is set, then sends delivered receipts for what it received.
 7. **E2EE-ready**: `body` is an opaque payload tagged with `content_type` (and a version). The server never parses it, so we can switch to ciphertext later without schema changes.
+8. **Invite-only sign-up**: Supabase can't know about invites, so the gate is profile creation: nothing in the app works without a profile. Sign-up is two steps: the form first asks only for the code (`POST /invites/check`); once it's accepted, it collects email, password, username and display name together, re-checks the code along with the username, and creates the Supabase account with `invite_code`, `username` and `display_name` in its metadata, so they survive confirming the email on another device. On first sign-in the client creates the profile from that metadata without another screen; the profile setup screen only appears if that fails (e.g. the username was taken in the meantime) or for older accounts without the details. `POST /profiles` claims the code in the same transaction that creates the profile (no valid code, no profile) and opens a conversation with the inviter, if any. Codes last 10 minutes, and a code counts if it's valid now **or was valid when the Supabase account was created** (`auth.users.created_at`), so a slow email confirmation doesn't lock anyone out. The same codes also connect two existing users (`POST /invites/redeem`). Making a new code doesn't revoke older ones, since an invitee may be between sign-up and profile setup.
+9. **Unread counts**: `GET /conversations` includes the caller's own `my_read_up_to_seq`. Clients count locally stored peer messages above it (showing `N+` when older unread history isn't loaded yet), advance it optimistically when they send `receipt.read`, and never let a server snapshot move any watermark backwards.
+10. **Typing**: while the draft is non-empty the client sends `typing {typing: true}` at most every 3s, and `typing: false` when the draft is cleared, sent, or the conversation is left. The server only relays it to the other member (nothing is stored). Receivers hide the indicator on `false`, when that person's message arrives, after 6s without a refresh, or on disconnect.
 
 ## API (draft)
 ### REST
-Every request except `/health` sends `Authorization: Bearer <supabase JWT>`. Sign-up and sign-in go straight to Supabase Auth. JSON fields are snake_case, and errors look like `{ "error": "<code>" }`.
+Every request except `/health` and `/invites/check` sends `Authorization: Bearer <supabase JWT>`. Sign-up and sign-in go straight to Supabase Auth. JSON fields are snake_case, and errors look like `{ "error": "<code>" }`.
 - `GET /me`: the caller's profile, or 404 `profile_not_found` (the client then shows profile setup)
-- `POST /profiles {username, display_name}`: create the caller's profile after sign-up. `username` must match `^[a-z0-9_]{3,30}$`. Returns 409 `username_taken` or `profile_exists`
+- `POST /profiles {username, display_name, invite_code?}`: create the caller's profile after sign-up, claiming an invite (from the body, else the account's `invite_code` metadata). `username` must match `^[a-z0-9_]{3,30}$`. Errors: 403 `invite_required`, 400 `invalid_code`, 404 `invite_not_found`, 410 `invite_used` / `invite_expired`, 409 `username_taken` / `profile_exists`. If the invite has a creator, it also opens their conversation and sends them `invite.redeemed`
 - `GET /users?q=`: search profiles by username prefix (case-insensitive, excludes the caller, max 20)
 - `POST /conversations {peer_id}`: creates the 1:1 conversation (201) or returns the existing one (200). Errors: 400 `cannot_message_self`, 403 `profile_required`, 404 `user_not_found`
-- `GET /conversations`: the caller's conversations, most recently active first, each as `{id, last_seq, created_at, last_message_at, peer: {id, username, display_name}, peer_delivered_up_to_seq, peer_read_up_to_seq}`
+- `GET /conversations`: the caller's conversations, most recently active first, each as `{id, last_seq, created_at, last_message_at, peer: {id, username, display_name}, peer_delivered_up_to_seq, peer_read_up_to_seq, my_read_up_to_seq}`
 - `GET /conversations/:id/messages?before_seq=&limit=50`: message history in ascending `seq` order (the latest page by default; `before_seq` pages backwards). 404 `conversation_not_found` if the caller isn't a member
+- `POST /invites`: a new one-time code for the caller, `{code, expires_at}` (10 minutes). 403 `profile_required`
+- `POST /invites/redeem {code}`: as an existing user, opens (201) or returns (200) the conversation with the code's creator, and sends them `invite.redeemed`. Errors: 400 `invalid_code` / `own_invite` / `signup_only_invite` (admin code), 404 `invite_not_found`, 410 `invite_used` / `invite_expired`
+- `POST /invites/check {code, username?}` (no auth): whether a code can be used to sign up and, only when it can, whether `username` is free. Returns `{code}` (normalized), the same code errors as redeem, or 400 `invalid_username` / 409 `username_taken`. Nothing is reserved
 - `POST /sync {cursors: {<conversation_id>: seq}}`: catch-up after (re)connecting. Returns `{conversations, messages, has_more}`: messages after each cursor (up to 100 per conversation), or the latest 50 for conversations with no cursor. `has_more` means call again with the advanced cursors
 
 ### WebSocket events
@@ -93,14 +104,16 @@ Browsers can't set headers on a WebSocket, and a token in the URL would end up i
   - `message.send {client_msg_id, conversation_id, content_type, body}`
   - `receipt.delivered {conversation_id, seq}`
   - `receipt.read {conversation_id, seq}`
+  - `typing {conversation_id, typing}`
 - Server → client:
   - `ready {user_id}`
   - `message.ack {client_msg_id, conversation_id, seq, created_at}`: sent to the socket that sent the message, including for retries of a message that's already stored
   - `message.new {message}`: sent to every member's other sockets. Not re-sent for a retry of an already stored message
   - `conversation.new {conversation}`: sent to the peer when a conversation is created
   - `receipt.update {conversation_id, user_id, delivered_up_to_seq, read_up_to_seq}`: sent to all members' other sockets when a watermark moves forward
-  - `receipt.update {conversation_id, user_id, delivered_up_to, read_up_to}`
-  - `error {client_msg_id?, reason}`: reasons are `invalid_message`, `invalid_receipt`, `not_a_member`, `duplicate_client_msg_id` (the same ID was used in another conversation), `internal_error`, `invalid_json`, `unknown_event`
+  - `typing {conversation_id, user_id, typing}`: relayed to the other member only
+  - `invite.redeemed {code, conversation}`: sent to an invite's creator when someone uses it (to connect or to sign up)
+  - `error {client_msg_id?, reason}`: reasons are `invalid_message`, `invalid_receipt`, `invalid_typing`, `not_a_member`, `duplicate_client_msg_id` (the same ID was used in another conversation), `internal_error`, `invalid_json`, `unknown_event`
 
 ## Build order
 1. `api-server` skeleton + migrations; `web-client` skeleton; Supabase dev project

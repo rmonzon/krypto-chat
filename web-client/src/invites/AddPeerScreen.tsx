@@ -1,17 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { api, ApiError } from '../lib/api'
+import { api } from '../lib/api'
+import { inviteErrorMessage } from '../lib/invites'
 import type { ChatSocket } from '../lib/socket'
 import type { Conversation, Invite } from '../lib/types'
 import { Avatar } from '../ui/Avatar'
 import { Icon } from '../ui/Icon'
-
-const REDEEM_ERRORS: Record<string, string> = {
-  invalid_code: 'That doesn’t look like an invite code.',
-  invite_not_found: 'No invite with that code.',
-  invite_used: 'That invite was already used.',
-  invite_expired: 'That invite expired. Ask for a new one.',
-  own_invite: 'That’s your own invite. Share it with someone else.',
-}
 
 type Props = {
   socket: Pick<ChatSocket, 'onEvent'>
@@ -133,7 +126,8 @@ function SharePanel({
         Share an invite
       </h3>
       <p className="ap-note">
-        Send this one-time code over any channel. It works once and expires in 10 minutes.
+        Send this one-time code over any channel. It works once and expires in 10 minutes. Friends
+        who aren’t on kryptochat yet can use it to sign up.
       </p>
       <div className={'invite-code' + (invite && !secondsLeft ? ' expired' : '')}>
         {failed ? <span className="invite-failed">couldn’t create a code</span> : (code ?? '····')}
@@ -187,10 +181,7 @@ function RedeemPanel({ onJoined }: { onJoined: (conversation: Conversation) => v
       })
       onJoined(conversation)
     } catch (err) {
-      setError(
-        (err instanceof ApiError && REDEEM_ERRORS[err.code]) ||
-          'Couldn’t reach the server. Try again.',
-      )
+      setError(inviteErrorMessage(err) ?? 'Couldn’t reach the server. Try again.')
       setBusy(false)
     }
   }

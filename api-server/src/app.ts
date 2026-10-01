@@ -3,7 +3,7 @@ import { requireAuth } from "./auth.js";
 import { pool } from "./db.js";
 import { registerRealtime } from "./realtime/index.js";
 import { conversationRoutes } from "./routes/conversations.js";
-import { inviteRoutes } from "./routes/invites.js";
+import { inviteRoutes, publicInviteRoutes } from "./routes/invites.js";
 import { profileRoutes } from "./routes/profiles.js";
 import { syncRoutes } from "./routes/sync.js";
 import { userRoutes } from "./routes/users.js";
@@ -22,6 +22,8 @@ export async function buildApp({ logger = true }: { logger?: boolean } = {}) {
       return reply.code(503).send({ status: "degraded", db: "error" });
     }
   });
+
+  await app.register(publicInviteRoutes);
 
   // Everything registered in this scope requires a valid Supabase access token.
   await app.register(async (authed) => {

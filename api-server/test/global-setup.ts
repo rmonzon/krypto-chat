@@ -53,7 +53,15 @@ export default async function setup(project: TestProject) {
   // Minimal stand-in for Supabase's auth schema, which profiles references.
   const client = new pg.Client({ connectionString: databaseUrl });
   await client.connect();
-  await client.query("create schema auth; create table auth.users (id uuid primary key);");
+  // The Supabase auth.users columns the app reads.
+  await client.query(`
+    create schema auth;
+    create table auth.users (
+      id uuid primary key,
+      created_at timestamptz not null default now(),
+      raw_user_meta_data jsonb
+    );
+  `);
   await client.end();
   await runMigrations(databaseUrl, () => {});
 

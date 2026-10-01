@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { pool } from "../src/db.js";
-import { normalizeInviteCode } from "../src/routes/invites.js";
-import { createAuthUser, createUser, request, TestSocket, useTestServer } from "./helpers.js";
+import { normalizeInviteCode } from "../src/invites/service.js";
+import {
+  adminInvite,
+  createAuthUser,
+  createUser,
+  request,
+  TestSocket,
+  useTestServer,
+} from "./helpers.js";
 
 useTestServer();
 
@@ -21,7 +28,7 @@ describe("normalizeInviteCode", () => {
 });
 
 describe("POST /invites", () => {
-  it("creates a code that expires in 10 minutes, replacing the previous unredeemed one", async () => {
+  it("creates a code that expires in 10 minutes; earlier codes stay valid", async () => {
     const alice = await createUser("alice");
 
     const first = await request("POST", "/invites", { token: alice.token });
@@ -31,9 +38,13 @@ describe("POST /invites", () => {
     expect(ttl).toBeGreaterThan(9 * 60_000);
     expect(ttl).toBeLessThanOrEqual(10 * 60_000);
 
+    // An invitee may have signed up with the earlier code and not finished setup yet.
     const second = await request("POST", "/invites", { token: alice.token });
-    const { rows } = await pool.query("select code from invites");
-    expect(rows).toEqual([{ code: second.body.code }]);
+    const { rows } = await pool.query(
+      "select code from invites where creator_id = $1 order by created_at",
+      [alice.id],
+    );
+    expect(rows).toEqual([{ code: first.body.code }, { code: second.body.code }]);
   });
 
   it("requires a profile", async () => {
@@ -95,6 +106,15 @@ describe("POST /invites/redeem", () => {
     );
     expect(results.map((r) => r.status).sort()).toEqual([201, 410]);
     expect(results.find((r) => r.status === 410)?.body).toEqual({ error: "invite_used" });
+  });
+
+  it("rejects admin (sign-up only) codes", async () => {
+    const bob = await createUser("bob");
+    const res = await request("POST", "/invites/redeem", {
+      token: bob.token,
+      body: { code: await adminInvite() },
+    });
+    expect(res).toEqual({ status: 400, body: { error: "signup_only_invite" } });
   });
 
   it("rejects expired, unknown, malformed, and own codes", async () => {
