@@ -76,6 +76,11 @@ export async function advanceChangeCursor(db: ChatDb, conversationId: string, se
   })
 }
 
+/** A message's identity as a string, e.g. for React keys (client_msg_id is unique per sender). */
+export function msgKey(m: Pick<Message, 'sender_id' | 'client_msg_id'>) {
+  return `${m.sender_id}:${m.client_msg_id}`
+}
+
 /** Acked messages in seq order, then pending ones in the order they were written. */
 export function compareMessages(a: Message, b: Message) {
   if (a.seq !== null && b.seq !== null) return a.seq - b.seq
