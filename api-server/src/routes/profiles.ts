@@ -7,6 +7,7 @@ import {
 import { pool, withTransaction } from "../db.js";
 import { inviteFailure, normalizeInviteCode, type InviteFailure } from "../invites/service.js";
 import { notifyUser } from "../realtime/index.js";
+import { NO_NUL_PATTERN } from "../validation.js";
 
 type CreateProfileBody = { username: string; display_name: string; invite_code?: string };
 type Profile = { id: string; username: string; display_name: string };
@@ -34,7 +35,7 @@ export async function profileRoutes(app: FastifyInstance) {
           additionalProperties: false,
           properties: {
             username: { type: "string", pattern: "^[a-z0-9_]{3,30}$" },
-            display_name: { type: "string", minLength: 1, maxLength: 60 },
+            display_name: { type: "string", minLength: 1, maxLength: 60, pattern: NO_NUL_PATTERN },
             invite_code: { type: "string", maxLength: 40 },
           },
         },

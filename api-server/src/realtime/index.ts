@@ -12,15 +12,21 @@ import {
   SYSTEM_CONTENT_PREFIX,
   type SendMessageInput,
 } from "../messages/service.js";
+import { hasNul } from "../validation.js";
 import { addConnection, notifyUser, removeConnection, sendEvent } from "./connections.js";
 
 // Real-time module. The rest of the app should only talk to it through the
 // exports below, so it can be extracted into its own service later.
 export { notifyUser } from "./connections.js";
 
-const AUTH_TIMEOUT_MS = 5_000;
-const HEARTBEAT_MS = 30_000;
 const CLOSE_UNAUTHORIZED = 4401;
+
+export type RealtimeOptions = {
+  /** How long a new socket has to send its auth message. */
+  authTimeoutMs?: number;
+  /** How often sockets are pinged; one missed pong drops the connection. */
+  heartbeatMs?: number;
+};
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -30,9 +36,11 @@ function parseSendMessage(event: Record<string, unknown>): SendMessageInput | un
   if (typeof conversation_id !== "string" || !UUID.test(conversation_id)) return undefined;
   if (typeof content_type !== "string" || content_type.length < 1 || content_type.length > 100)
     return undefined;
+  if (hasNul(content_type)) return undefined;
   // Reserved for notices the server posts (e.g. auto-delete changes).
   if (content_type.startsWith(SYSTEM_CONTENT_PREFIX)) return undefined;
   if (typeof body !== "string" || body.length < 1 || body.length > 10_000) return undefined;
+  if (hasNul(body)) return undefined;
   return { client_msg_id, conversation_id, content_type, body };
 }
 
@@ -138,7 +146,11 @@ async function handleEvent(userId: string, socket: WebSocket, event: Record<stri
   }
 }
 
-function handleConnection(socket: WebSocket, log: FastifyBaseLogger) {
+function handleConnection(
+  socket: WebSocket,
+  log: FastifyBaseLogger,
+  { authTimeoutMs, heartbeatMs }: Required<RealtimeOptions>,
+) {
   let userId: string | undefined;
   let alive = true;
   // Handle one incoming message at a time so a client's sends keep their order.
@@ -146,14 +158,14 @@ function handleConnection(socket: WebSocket, log: FastifyBaseLogger) {
 
   const authTimer = setTimeout(() => {
     if (!userId) socket.close(CLOSE_UNAUTHORIZED, "auth timeout");
-  }, AUTH_TIMEOUT_MS);
+  }, authTimeoutMs);
 
   // Browsers answer pings automatically; a missed pong means a dead connection.
   const heartbeat = setInterval(() => {
     if (!alive) return socket.terminate();
     alive = false;
     socket.ping();
-  }, HEARTBEAT_MS);
+  }, heartbeatMs);
   socket.on("pong", () => {
     alive = true;
   });
@@ -204,7 +216,12 @@ function handleConnection(socket: WebSocket, log: FastifyBaseLogger) {
   });
 }
 
-export async function registerRealtime(app: FastifyInstance) {
+export async function registerRealtime(
+  app: FastifyInstance,
+  { authTimeoutMs = 5_000, heartbeatMs = 30_000 }: RealtimeOptions = {},
+) {
   await app.register(websocket, { options: { maxPayload: 64 * 1024 } });
-  app.get("/ws", { websocket: true }, (socket, request) => handleConnection(socket, request.log));
+  app.get("/ws", { websocket: true }, (socket, request) =>
+    handleConnection(socket, request.log, { authTimeoutMs, heartbeatMs }),
+  );
 }

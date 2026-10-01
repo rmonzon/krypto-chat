@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { pool } from "../src/db.js";
 import {
   createConversation,
@@ -169,5 +169,66 @@ describe("message.send", () => {
 
     await bobSocket.expectNone("error");
     for (const s of [aliceSocket, bobSocket, eveSocket]) s.close();
+  });
+
+  it("rejects NUL characters, which Postgres can't store, as invalid", async () => {
+    const { conversationId, aliceSocket, bobSocket } = await setup();
+    for (const field of ["body", "content_type"]) {
+      const clientMsgId = randomUUID();
+      aliceSocket.send({
+        type: "message.send",
+        client_msg_id: clientMsgId,
+        conversation_id: conversationId,
+        content_type: "text/plain",
+        body: "hi",
+        [field]: "a\u0000b",
+      });
+      expect(await aliceSocket.next("error")).toEqual({
+        type: "error",
+        reason: "invalid_message",
+        client_msg_id: clientMsgId,
+      });
+    }
+    aliceSocket.close();
+    bobSocket.close();
+  });
+});
+
+describe("websocket errors", () => {
+  it("answers frames that aren't a JSON object with invalid_json, and keeps going", async () => {
+    const { conversationId, aliceSocket, bobSocket } = await setup();
+    aliceSocket.sendRaw("{oops");
+    expect(await aliceSocket.next("error")).toEqual({ type: "error", reason: "invalid_json" });
+    aliceSocket.sendRaw("42");
+    expect(await aliceSocket.next("error")).toEqual({ type: "error", reason: "invalid_json" });
+
+    expect((await sendText(aliceSocket, conversationId, "still here")).seq).toBe(1);
+    aliceSocket.close();
+    bobSocket.close();
+  });
+
+  it("reports internal_error for a failed send, and handles later events", async () => {
+    const { conversationId, aliceSocket, bobSocket } = await setup();
+    const clientMsgId = randomUUID();
+    const connect = vi.spyOn(pool, "connect").mockRejectedValueOnce(new Error("db down"));
+
+    aliceSocket.send({
+      type: "message.send",
+      client_msg_id: clientMsgId,
+      conversation_id: conversationId,
+      content_type: "text/plain",
+      body: "hi",
+    });
+    expect(await aliceSocket.next("error")).toEqual({
+      type: "error",
+      reason: "internal_error",
+      client_msg_id: clientMsgId,
+    });
+    connect.mockRestore();
+
+    // A retry of the same message goes through once the database is back.
+    expect((await sendText(aliceSocket, conversationId, "hi", clientMsgId)).seq).toBe(1);
+    aliceSocket.close();
+    bobSocket.close();
   });
 });
