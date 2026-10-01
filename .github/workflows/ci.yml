@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api-server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api-server
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: api-server/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: api-server/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      # Integration tests: start their own Postgres (embedded-postgres) and fake auth server.
+      - run: pnpm test:coverage
+
+  web-client:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-client
+    steps:
+      # The whole repo: protocol.test.ts reads api-server/src/protocol.ts.
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web-client/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web-client/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      # Typecheck (tsc -b) and production build.
+      - run: pnpm build
+      - run: pnpm test:coverage
