@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyError } from "fastify";
 import { requireAuth } from "./auth.js";
 import { pool } from "./db.js";
 import { registerRealtime } from "./realtime/index.js";
@@ -10,6 +10,14 @@ import { userRoutes } from "./routes/users.js";
 
 export async function buildApp({ logger = true }: { logger?: boolean } = {}) {
   const app = Fastify({ logger });
+
+  // Unexpected failures answer in the API's { error } shape, without internals
+  // such as database error messages. Validation and other 4xx errors pass through.
+  app.setErrorHandler<FastifyError>((err, request, reply) => {
+    if (err.statusCode !== undefined && err.statusCode < 500) return reply.send(err);
+    request.log.error({ err }, "request failed");
+    return reply.code(500).send({ error: "internal_error" });
+  });
 
   app.decorateRequest("userId", "");
 

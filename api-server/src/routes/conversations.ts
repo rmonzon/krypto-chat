@@ -12,6 +12,7 @@ import {
   TTL_OPTIONS_SECONDS,
 } from "../messages/service.js";
 import { notifyUser } from "../realtime/index.js";
+import { NO_NUL_PATTERN } from "../validation.js";
 
 const changeErrorStatus = {
   message_not_found: 404,
@@ -125,7 +126,9 @@ export async function conversationRoutes(app: FastifyInstance) {
           type: "object",
           required: ["body"],
           additionalProperties: false,
-          properties: { body: { type: "string", minLength: 1, maxLength: 10_000 } },
+          properties: {
+            body: { type: "string", minLength: 1, maxLength: 10_000, pattern: NO_NUL_PATTERN },
+          },
         },
       },
     },

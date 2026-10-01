@@ -170,4 +170,26 @@ describe("message.send", () => {
     await bobSocket.expectNone("error");
     for (const s of [aliceSocket, bobSocket, eveSocket]) s.close();
   });
+
+  it("rejects NUL characters, which Postgres can't store, as invalid", async () => {
+    const { conversationId, aliceSocket, bobSocket } = await setup();
+    for (const field of ["body", "content_type"]) {
+      const clientMsgId = randomUUID();
+      aliceSocket.send({
+        type: "message.send",
+        client_msg_id: clientMsgId,
+        conversation_id: conversationId,
+        content_type: "text/plain",
+        body: "hi",
+        [field]: "a\u0000b",
+      });
+      expect(await aliceSocket.next("error")).toEqual({
+        type: "error",
+        reason: "invalid_message",
+        client_msg_id: clientMsgId,
+      });
+    }
+    aliceSocket.close();
+    bobSocket.close();
+  });
 });

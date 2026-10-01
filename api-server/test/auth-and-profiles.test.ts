@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { pool } from "../src/db.js";
 import {
   adminInvite,
   createAuthUser,
@@ -14,6 +15,15 @@ describe("auth", () => {
   it("serves /health without a token", async () => {
     const res = await request("GET", "/health");
     expect(res).toEqual({ status: 200, body: { status: "ok", db: "ok" } });
+  });
+
+  it("answers unexpected failures with internal_error, without internals", async () => {
+    const { token } = await createAuthUser();
+    vi.spyOn(pool, "query").mockRejectedValueOnce(new Error('relation "profiles" is locked'));
+    expect(await request("GET", "/me", { token })).toEqual({
+      status: 500,
+      body: { error: "internal_error" },
+    });
   });
 
   it("rejects missing, malformed, and mis-scoped tokens", async () => {
@@ -77,6 +87,15 @@ describe("profiles", () => {
       expect(res.status, username).toBe(400);
     }
   });
+
+  it("rejects a display name with NUL characters, which Postgres can't store", async () => {
+    const { token } = await createAuthUser();
+    const res = await request("POST", "/profiles", {
+      token,
+      body: { username: "alice", display_name: "Al\u0000ice", invite_code: await adminInvite() },
+    });
+    expect(res).toMatchObject({ status: 400, body: { code: "FST_ERR_VALIDATION" } });
+  });
 });
 
 describe("user search", () => {
@@ -97,6 +116,11 @@ describe("user search", () => {
     expect(underscore.body.users.map((u: { username: string }) => u.username)).toEqual(["a_b"]);
     const percent = await request("GET", "/users?q=%25", { token: me.token });
     expect(percent.body.users).toEqual([]);
+  });
+
+  it("rejects a query with NUL characters", async () => {
+    const me = await createUser("searcher");
+    expect((await request("GET", "/users?q=a%00", { token: me.token })).status).toBe(400);
   });
 
   it("returns nobody for a whitespace-only query", async () => {

@@ -83,6 +83,14 @@ describe("PATCH /conversations/:id/messages/:seq", () => {
     aliceSocket.close();
     bobSocket.close();
   });
+
+  it("rejects a body with NUL characters, which Postgres can't store", async () => {
+    const { alice, aliceSocket, bobSocket, path } = await setup();
+    const res = await request("PATCH", path, { token: alice.token, body: { body: "a\u0000b" } });
+    expect(res.status).toBe(400);
+    aliceSocket.close();
+    bobSocket.close();
+  });
 });
 
 describe("DELETE /conversations/:id/messages/:seq", () => {

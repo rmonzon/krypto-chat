@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { pool } from "../db.js";
+import { NO_NUL_PATTERN } from "../validation.js";
 
 export async function userRoutes(app: FastifyInstance) {
   // Username prefix search, excluding the caller.
@@ -10,7 +11,9 @@ export async function userRoutes(app: FastifyInstance) {
         querystring: {
           type: "object",
           required: ["q"],
-          properties: { q: { type: "string", minLength: 1, maxLength: 30 } },
+          properties: {
+            q: { type: "string", minLength: 1, maxLength: 30, pattern: NO_NUL_PATTERN },
+          },
         },
       },
     },
