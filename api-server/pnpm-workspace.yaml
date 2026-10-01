@@ -1,3 +1,13 @@
+# Packages allowed to run install scripts. embedded-postgres (test-only) has
+# one package per platform; all are listed so tests install on any machine,
+# including CI (linux-x64).
 allowBuilds:
   '@embedded-postgres/darwin-arm64': true
+  '@embedded-postgres/darwin-x64': true
+  '@embedded-postgres/linux-arm': true
+  '@embedded-postgres/linux-arm64': true
+  '@embedded-postgres/linux-ia32': true
+  '@embedded-postgres/linux-ppc64': true
+  '@embedded-postgres/linux-x64': true
+  '@embedded-postgres/windows-x64': true
   esbuild: true
