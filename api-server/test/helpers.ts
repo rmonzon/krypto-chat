@@ -4,6 +4,7 @@ import { importJWK, SignJWT } from "jose";
 import { afterAll, beforeAll, beforeEach, expect, inject } from "vitest";
 import { buildApp } from "../src/app.js";
 import { pool } from "../src/db.js";
+import { createInvite } from "../src/invites/service.js";
 
 const env = inject("testEnv");
 const privateKey = await importJWK(JSON.parse(env.privateJwk), "ES256");
@@ -70,11 +71,24 @@ export async function request<T = any>(
   return { status: res.status, body: (await res.json().catch(() => null)) as T };
 }
 
-/** A signed-up Supabase user without an app profile. */
-export async function createAuthUser(): Promise<{ id: string; token: string }> {
+/**
+ * A signed-up Supabase user without an app profile. metadata is what the
+ * sign-up form stores (e.g. invite_code); createdAt backdates the sign-up.
+ */
+export async function createAuthUser(
+  options: { metadata?: Record<string, unknown>; createdAt?: Date } = {},
+): Promise<{ id: string; token: string }> {
   const id = randomUUID();
-  await pool.query("insert into auth.users (id) values ($1)", [id]);
+  await pool.query(
+    "insert into auth.users (id, created_at, raw_user_meta_data) values ($1, $2, $3)",
+    [id, options.createdAt ?? new Date(), options.metadata ?? null],
+  );
   return { id, token: await signToken(id) };
+}
+
+/** A sign-up invite from the admin CLI (no inviter). */
+export async function adminInvite(): Promise<string> {
+  return (await createInvite(pool, null)).code;
 }
 
 /** A user with a profile, ready to chat. */
@@ -82,7 +96,7 @@ export async function createUser(username: string): Promise<TestUser> {
   const { id, token } = await createAuthUser();
   const res = await request("POST", "/profiles", {
     token,
-    body: { username, display_name: username.toUpperCase() },
+    body: { username, display_name: username.toUpperCase(), invite_code: await adminInvite() },
   });
   expect(res.status).toBe(201);
   return { id, username, token };

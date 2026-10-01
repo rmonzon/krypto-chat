@@ -332,13 +332,17 @@ body {
 /* ================= LOCK ================= */
 .lock-screen {
   align-items: center;
-  justify-content: center;
+  /* safe: a card taller than the screen scrolls from its top instead of being cut off. */
+  justify-content: safe center;
   position: relative;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 24px 0;
 }
 
 .matrix-rain {
-  position: absolute;
+  /* fixed: stays put while a tall lock screen scrolls. */
+  position: fixed;
   inset: 0;
   width: 100%;
   height: 100%;
@@ -346,7 +350,7 @@ body {
 }
 
 .lock-vapor {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 0;
   background: radial-gradient(60% 50% at 50% 45%, color-mix(in srgb, var(--green) 9%, transparent), transparent 70%);
@@ -355,6 +359,7 @@ body {
 .lock-core {
   position: relative;
   z-index: 2;
+  flex: none;
   width: min(420px, calc(100% - 32px));
   display: flex;
   flex-direction: column;
@@ -441,11 +446,38 @@ body {
   color: var(--muted);
 }
 
+.key-input input.invite-input {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.key-input input.invite-input::placeholder {
+  text-transform: none;
+}
+
 .key-input .ki-at {
   font-size: 15px;
   font-weight: 700;
   width: 16px;
   text-align: center;
+}
+
+.invite-accepted {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px dashed color-mix(in srgb, var(--green) 40%, transparent);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--green);
+  font-size: 13px;
+  letter-spacing: 0.12em;
+}
+
+.invite-accepted .kd-fill {
+  margin-left: auto;
+  letter-spacing: normal;
 }
 
 .lock-go {

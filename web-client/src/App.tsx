@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js'
 import { AuthScreen } from './auth/AuthScreen'
 import { ChatHome } from './conversations/ChatHome'
 import { api, ApiError } from './lib/api'
+import { inviteErrorMessage } from './lib/invites'
 import { deleteChatDb, getChatDb } from './lib/db'
 import { supabase } from './lib/supabase'
 import type { Profile } from './lib/types'
@@ -37,17 +38,28 @@ export default function App() {
         <AuthScreen />
       ) : (
         // Keyed by user so switching accounts resets profile state.
-        <SignedIn key={session.user.id} userId={session.user.id} />
+        <SignedIn
+          key={session.user.id}
+          userId={session.user.id}
+          signup={session.user.user_metadata as SignupDetails}
+        />
       )}
     </div>
   )
 }
 
-function SignedIn({ userId }: { userId: string }) {
+/** What the sign-up form saved on the Supabase account (user metadata). */
+type SignupDetails = { invite_code?: string; username?: string; display_name?: string }
+
+function SignedIn({ userId, signup }: { userId: string; signup: SignupDetails }) {
   const db = getChatDb(userId)
   // undefined = loading, null = user has no profile yet
   const [profile, setProfile] = useState<Profile | null | undefined>(undefined)
   const [error, setError] = useState(false)
+  // Why creating the profile from the sign-up details failed, shown on the setup screen.
+  const [setupError, setSetupError] = useState<string | null>(null)
+  // Strings, not the metadata object: Supabase hands out a new object on every token refresh.
+  const { invite_code, username, display_name } = signup
 
   useEffect(() => {
     let cancelled = false
@@ -63,15 +75,38 @@ function SignedIn({ userId }: { userId: string }) {
         await db.meta.put({ key: 'profile', value: fresh })
       } catch (err) {
         if (cancelled) return
-        if (err instanceof ApiError && err.status === 404) setProfile(null)
-        else if (!cached) setError(true)
+        if (err instanceof ApiError && err.status === 404) {
+          const created = await createFromSignup()
+          if (cancelled) return
+          setProfile(created)
+          if (created) await db.meta.put({ key: 'profile', value: created })
+        } else if (!cached) setError(true)
       }
     }
+    // First sign-in after sign-up: the form already collected the profile
+    // details, so create it without another screen. Null means show setup.
+    async function createFromSignup(): Promise<Profile | null> {
+      if (!username || !display_name) return null
+      try {
+        return await api<Profile>('/profiles', {
+          method: 'POST',
+          body: JSON.stringify({ username, display_name, invite_code }),
+        })
+      } catch (err) {
+        // Another tab (or StrictMode's second run) got there first.
+        if (err instanceof ApiError && err.code === 'profile_exists') return api<Profile>('/me')
+        if (!cancelled) {
+          setSetupError(inviteErrorMessage(err) ?? 'Could not create your profile. Try again.')
+        }
+        return null
+      }
+    }
+
     void load()
     return () => {
       cancelled = true
     }
-  }, [db])
+  }, [db, invite_code, username, display_name])
 
   function handleProfileCreated(created: Profile) {
     setProfile(created)
@@ -91,7 +126,19 @@ function SignedIn({ userId }: { userId: string }) {
     )
   }
   if (profile === undefined) return null
-  if (profile === null) return <ProfileSetup onCreated={handleProfileCreated} />
+  if (profile === null) {
+    return (
+      <ProfileSetup
+        initial={{
+          inviteCode: invite_code,
+          username,
+          displayName: display_name,
+          error: setupError,
+        }}
+        onCreated={handleProfileCreated}
+      />
+    )
+  }
 
   return <ChatHome profile={profile} db={db} />
 }
