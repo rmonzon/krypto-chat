@@ -19,9 +19,9 @@ describe("withTransaction", () => {
   });
 
   it("throws fn's error, not the rollback's, and discards the broken connection", async () => {
-    const release = vi.fn();
+    const release = vi.fn<(err?: Error) => void>();
     const client = {
-      query: vi.fn(async (sql: string) => {
+      query: vi.fn<(sql: string) => Promise<void>>(async (sql) => {
         if (sql === "rollback") throw new Error("connection lost");
       }),
       release,

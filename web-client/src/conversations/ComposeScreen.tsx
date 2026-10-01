@@ -1,4 +1,5 @@
 import { useState, type FormEvent, type KeyboardEvent } from 'react'
+import { MAX_BODY_LENGTH } from '../lib/limits'
 import type { Conversation, Profile } from '../lib/types'
 import { Avatar } from '../ui/Avatar'
 import { userColor } from '../ui/colors'
@@ -133,7 +134,7 @@ export function ComposeScreen({ myId, conversations, onCancel, onSend }: Props) 
               onChange={(e) => setText(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="write your message…"
-              maxLength={10_000}
+              maxLength={MAX_BODY_LENGTH}
               spellCheck={false}
               autoFocus
               disabled={sending}
