@@ -1,17 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { api } from '../lib/api'
-import {
-  advanceCursor,
-  advanceMyRead,
-  compareConversations,
-  putConversations,
-  putServerMessages,
-  type ChatDb,
-} from '../lib/db'
+import { advanceMyRead, compareConversations, putConversations, type ChatDb } from '../lib/db'
 import { changeMessage } from '../lib/edits'
+import { applyServerEvent, inOrder } from '../lib/events'
 import { purgeExpired } from '../lib/expiry'
-import { loadOlderMessages } from '../lib/history'
+import { loadLatestMessages, loadOlderMessages } from '../lib/history'
 import { Outbox } from '../lib/outbox'
 import { Receipts } from '../lib/receipts'
 import { ChatSocket, type ConnectionStatus } from '../lib/socket'
@@ -21,7 +15,7 @@ import { supabase } from '../lib/supabase'
 import { Brand } from '../ui/Brand'
 import { Clock } from '../ui/Clock'
 import { Icon } from '../ui/Icon'
-import type { Conversation, Message, MessagePage, Profile } from '../lib/types'
+import type { Conversation, Message, Profile, ServerEvent } from '../lib/types'
 import { AddPeerScreen } from '../invites/AddPeerScreen'
 import { IdentityScreen } from '../profile/IdentityScreen'
 import { UserSearch } from '../users/UserSearch'
@@ -73,14 +67,6 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
     }
   }, [db])
 
-  const touchConversation = useCallback(
-    async (conversationId: string, at: string) => {
-      const found = await db.conversations.update(conversationId, { last_message_at: at })
-      if (!found) await loadConversations()
-    },
-    [db, loadConversations],
-  )
-
   useEffect(() => {
     void loadConversations()
   }, [loadConversations])
@@ -100,59 +86,17 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
         void syncer.run()
       }
     })
-    const offEvent = socket.onEvent(async (event) => {
-      switch (event.type) {
-        case 'message.ack':
-          await outbox.onAck(event)
-          await advanceCursor(db, event.conversation_id, event.seq, event.seq)
-          await touchConversation(event.conversation_id, event.created_at)
-          break
-        case 'message.new': {
-          const { message } = event
-          await putServerMessages(db, [message])
-          // Their message is here, so they've stopped typing it.
-          if (message.sender_id !== profile.id) typingTracker.update(message.conversation_id, false)
-          await advanceCursor(db, message.conversation_id, message.seq, message.seq)
-          await touchConversation(message.conversation_id, message.created_at)
-          if (message.sender_id !== profile.id) receipts.markDelivered(message.conversation_id, message.seq)
-          break
-        }
-        case 'message.updated':
-          // Edited or deleted. Older history that isn't loaded arrives current when fetched.
-          await putServerMessages(db, [event.message], { onlyExisting: true })
-          break
-        // invite.redeemed: someone used our invite; the Add peer screen reacts to it too.
-        case 'invite.redeemed':
-        case 'conversation.new':
-        case 'conversation.updated':
-          await putConversations(db, [event.conversation])
-          break
-        case 'receipt.update':
-          if (event.user_id === profile.id) {
-            // Read in another tab: clear the unread count here too.
-            await advanceMyRead(db, event.conversation_id, event.read_up_to_seq)
-          } else {
-            await db.conversations
-              .where('id')
-              .equals(event.conversation_id)
-              .modify((c) => {
-                // ?? 0: conversations cached before receipts existed lack these fields.
-                c.peer_delivered_up_to_seq = Math.max(
-                  c.peer_delivered_up_to_seq ?? 0,
-                  event.delivered_up_to_seq,
-                )
-                c.peer_read_up_to_seq = Math.max(c.peer_read_up_to_seq ?? 0, event.read_up_to_seq)
-              })
-          }
-          break
-        case 'typing':
-          if (event.user_id !== profile.id) typingTracker.update(event.conversation_id, event.typing)
-          break
-        case 'error':
-          await outbox.onError(event)
-          break
-      }
-    })
+    const handleEvent = inOrder((event: ServerEvent) =>
+      applyServerEvent(event, {
+        db,
+        myId: profile.id,
+        outbox,
+        receipts,
+        typing: typingTracker,
+        refreshConversations: loadConversations,
+      }),
+    )
+    const offEvent = socket.onEvent((event) => void handleEvent(event))
     const offTyping = typingTracker.subscribe(setPeerTyping)
     outbox.start()
     socket.start()
@@ -173,7 +117,7 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
     typingTracker,
     db,
     profile.id,
-    touchConversation,
+    loadConversations,
   ])
 
   // Auto-delete: remove expired messages from the local DB too, not just from view.
@@ -194,13 +138,8 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
   // this session. Cached messages show immediately in the meantime.
   useEffect(() => {
     if (!selectedId || loaded[selectedId]) return
-    api<MessagePage>(`/conversations/${selectedId}/messages`)
-      .then(async ({ messages, has_more, up_to_seq }) => {
-        await putServerMessages(db, messages)
-        // The page covers everything up to up_to_seq (gaps expired), and from
-        // its first message, or from seq 1 if nothing older is left.
-        const from = has_more ? Math.min(...messages.map((m) => m.seq)) : 1
-        await advanceCursor(db, selectedId, from, up_to_seq ?? 0, true)
+    loadLatestMessages(db, selectedId)
+      .then((messages) => {
         setLoaded((prev) => ({ ...prev, [selectedId]: true }))
         const peerSeqs = messages.filter((m) => m.sender_id !== profile.id).map((m) => m.seq)
         if (peerSeqs.length) receipts.markDelivered(selectedId, Math.max(...peerSeqs))

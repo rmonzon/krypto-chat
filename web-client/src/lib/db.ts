@@ -126,6 +126,23 @@ export async function advanceMyRead(db: ChatDb, conversationId: string, seq: num
     })
 }
 
+/** Moves the peer's delivered and read watermarks forward (never back). */
+export async function advancePeerReceipts(
+  db: ChatDb,
+  conversationId: string,
+  deliveredUpToSeq: number,
+  readUpToSeq: number,
+) {
+  await db.conversations
+    .where('id')
+    .equals(conversationId)
+    .modify((c) => {
+      // ?? 0: conversations cached before receipts existed lack these fields.
+      c.peer_delivered_up_to_seq = Math.max(c.peer_delivered_up_to_seq ?? 0, deliveredUpToSeq)
+      c.peer_read_up_to_seq = Math.max(c.peer_read_up_to_seq ?? 0, readUpToSeq)
+    })
+}
+
 /**
  * Records that messages from..to (a gap-free seq range) are stored locally.
  * The cursor only moves when the range connects to it, so a live message
