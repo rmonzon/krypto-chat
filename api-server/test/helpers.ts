@@ -56,6 +56,11 @@ export function useTestServer(options: AppOptions = {}) {
   });
 }
 
+/** The current test file's HTTP base URL, for requests `request` can't make (headers in or out). */
+export function baseUrl() {
+  return server.baseUrl;
+}
+
 /** The current test file's WebSocket endpoint, for clients other than TestSocket. */
 export function wsUrl() {
   return server.wsUrl;
