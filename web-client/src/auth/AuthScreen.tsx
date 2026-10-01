@@ -2,9 +2,9 @@ import { useState, type FormEvent, type ReactNode } from 'react'
 import { api } from '../lib/api'
 import { inviteErrorMessage } from '../lib/invites'
 import { supabase } from '../lib/supabase'
-import { Brand } from '../ui/Brand'
+import { ProfileFields } from '../profile/ProfileFields'
 import { Icon } from '../ui/Icon'
-import { MatrixRain } from '../ui/MatrixRain'
+import { LockScreen } from '../ui/LockScreen'
 
 // Sign-up is invite-only: first the code, then (once it checks out) the
 // account and profile details together.
@@ -118,177 +118,136 @@ export function AuthScreen() {
   )
 
   return (
-    <div className="screen lock-screen">
-      <MatrixRain opacity={0.45} />
-      <div className="lock-vapor" />
-      <div className={'lock-core ' + (shaking ? 'bad' : busy ? 'busy' : '')}>
-        <div className="lock-badge">
-          <span className="lock-ring" />
-          <Icon name={step === 'code' ? 'ticket' : 'lock'} size={30} />
-        </div>
-        <Brand size={1.5} />
-        <div className="lock-status" role="status" aria-live="polite">
-          {status}
-        </div>
+    <LockScreen
+      icon={step === 'code' ? 'ticket' : 'lock'}
+      iconSize={30}
+      rainOpacity={0.45}
+      mood={shaking ? 'bad' : busy ? 'busy' : undefined}
+      status={status}
+    >
+      <form className={'lock-form ' + (error ? 'bad' : '')} onSubmit={handleSubmit}>
+        {step === 'code' && (
+          <>
+            <label className="field-label" htmlFor="auth-invite">
+              Invite code
+            </label>
+            <div className="key-input">
+              <Icon name="ticket" size={16} className="ki-lead" />
+              <input
+                id="auth-invite"
+                className="invite-input"
+                placeholder="KC-XXXX-XXXX-XXXX"
+                required
+                autoFocus
+                maxLength={40}
+                spellCheck={false}
+                autoComplete="off"
+                aria-describedby="auth-invite-hint"
+                value={codeInput}
+                onChange={(e) => setCodeInput(e.target.value)}
+              />
+            </div>
+            <span className="field-hint" id="auth-invite-hint">
+              kryptochat is invite-only. Ask someone already on it to share a code.
+            </span>
+          </>
+        )}
 
-        <form className={'lock-form ' + (error ? 'bad' : '')} onSubmit={handleSubmit}>
-          {step === 'code' && (
-            <>
-              <label className="field-label" htmlFor="auth-invite">
-                Invite code
-              </label>
-              <div className="key-input">
-                <Icon name="ticket" size={16} className="ki-lead" />
-                <input
-                  id="auth-invite"
-                  className="invite-input"
-                  placeholder="KC-XXXX-XXXX-XXXX"
-                  required
-                  autoFocus
-                  maxLength={40}
-                  spellCheck={false}
-                  autoComplete="off"
-                  aria-describedby="auth-invite-hint"
-                  value={codeInput}
-                  onChange={(e) => setCodeInput(e.target.value)}
-                />
-              </div>
-              <span className="field-hint" id="auth-invite-hint">
-                kryptochat is invite-only. Ask someone already on it to share a code.
-              </span>
-            </>
-          )}
+        {step === 'details' && code && (
+          <div className="invite-accepted">
+            <Icon name="check2" size={14} />
+            <span>{code}</span>
+            <button type="button" className="kd-fill" onClick={() => go('code')}>
+              change
+            </button>
+          </div>
+        )}
 
-          {step === 'details' && code && (
-            <div className="invite-accepted">
-              <Icon name="check2" size={14} />
-              <span>{code}</span>
-              <button type="button" className="kd-fill" onClick={() => go('code')}>
-                change
+        {step !== 'code' && (
+          <>
+            <label className="field-label" htmlFor="auth-email">
+              {step === 'details' ? 'Email' : 'Identity'}
+            </label>
+            <div className="key-input">
+              <Icon name="mail" size={16} className="ki-lead" />
+              <input
+                id="auth-email"
+                type="email"
+                placeholder="email address"
+                autoComplete="email"
+                spellCheck={false}
+                required
+                autoFocus
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+
+            <label className="field-label" htmlFor="auth-password">
+              Master key
+            </label>
+            <div className="key-input">
+              <Icon name="key" size={16} className="ki-lead" />
+              <input
+                id="auth-password"
+                type={showPassword ? 'text' : 'password'}
+                placeholder={step === 'sign-in' ? 'enter password' : 'choose a password (6+ chars)'}
+                autoComplete={step === 'sign-in' ? 'current-password' : 'new-password'}
+                spellCheck={false}
+                required
+                minLength={6}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <button
+                type="button"
+                className="ki-eye"
+                onClick={() => setShowPassword((s) => !s)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                aria-pressed={showPassword}
+              >
+                <Icon name="eye" size={16} />
               </button>
             </div>
-          )}
+          </>
+        )}
 
-          {step !== 'code' && (
-            <>
-              <label className="field-label" htmlFor="auth-email">
-                {step === 'details' ? 'Email' : 'Identity'}
-              </label>
-              <div className="key-input">
-                <Icon name="mail" size={16} className="ki-lead" />
-                <input
-                  id="auth-email"
-                  type="email"
-                  placeholder="email address"
-                  autoComplete="email"
-                  spellCheck={false}
-                  required
-                  autoFocus
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </div>
+        {step === 'details' && (
+          <ProfileFields
+            idPrefix="auth"
+            username={username}
+            displayName={displayName}
+            onUsernameChange={setUsername}
+            onDisplayNameChange={setDisplayName}
+          />
+        )}
 
-              <label className="field-label" htmlFor="auth-password">
-                Master key
-              </label>
-              <div className="key-input">
-                <Icon name="key" size={16} className="ki-lead" />
-                <input
-                  id="auth-password"
-                  type={showPassword ? 'text' : 'password'}
-                  placeholder={step === 'sign-in' ? 'enter password' : 'choose a password (6+ chars)'}
-                  autoComplete={step === 'sign-in' ? 'current-password' : 'new-password'}
-                  spellCheck={false}
-                  required
-                  minLength={6}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="ki-eye"
-                  onClick={() => setShowPassword((s) => !s)}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  aria-pressed={showPassword}
-                >
-                  <Icon name="eye" size={16} />
-                </button>
-              </div>
-            </>
-          )}
-
-          {step === 'details' && (
-            <>
-              <label className="field-label" htmlFor="auth-username">
-                Username
-              </label>
-              <div className="key-input">
-                <span className="ki-lead ki-at" aria-hidden="true">
-                  @
-                </span>
-                <input
-                  id="auth-username"
-                  placeholder="lowercase, digits, _"
-                  required
-                  spellCheck={false}
-                  autoComplete="username"
-                  pattern="[a-z0-9_]{3,30}"
-                  title="3–30 characters: lowercase letters, numbers, underscore"
-                  aria-describedby="auth-username-hint"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value.toLowerCase())}
-                />
-              </div>
-              <span className="field-hint" id="auth-username-hint">
-                3–30 characters. Others find you by this, and it can’t be changed later.
-              </span>
-
-              <label className="field-label" htmlFor="auth-display-name">
-                Display name
-              </label>
-              <div className="key-input">
-                <Icon name="user" size={16} className="ki-lead" />
-                <input
-                  id="auth-display-name"
-                  placeholder="how you appear to peers"
-                  required
-                  maxLength={60}
-                  autoComplete="nickname"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                />
-              </div>
-            </>
-          )}
-
-          <button type="submit" className="btn-primary lock-go" disabled={busy}>
-            {busy ? (
-              <span className="spin" />
-            ) : (
-              <Icon name={step === 'code' ? 'chevron' : 'shield'} size={16} />
-            )}
-            {step === 'sign-in' ? 'Decrypt vault' : step === 'code' ? 'Continue' : 'Create vault'}
-          </button>
-        </form>
-
-        <button
-          type="button"
-          className="hint-chip"
-          onClick={() => go(step === 'sign-in' ? 'code' : 'sign-in')}
-        >
-          <Icon name={step === 'sign-in' ? 'ticket' : 'unlock'} size={12} />
-          {step === 'sign-in' ? (
-            <>
-              have an invite?&nbsp;<b>sign up</b>
-            </>
+        <button type="submit" className="btn-primary lock-go" disabled={busy}>
+          {busy ? (
+            <span className="spin" />
           ) : (
-            <>
-              have an account?&nbsp;<b>sign in</b>
-            </>
+            <Icon name={step === 'code' ? 'chevron' : 'shield'} size={16} />
           )}
+          {step === 'sign-in' ? 'Decrypt vault' : step === 'code' ? 'Continue' : 'Create vault'}
         </button>
-      </div>
-    </div>
+      </form>
+
+      <button
+        type="button"
+        className="hint-chip"
+        onClick={() => go(step === 'sign-in' ? 'code' : 'sign-in')}
+      >
+        <Icon name={step === 'sign-in' ? 'ticket' : 'unlock'} size={12} />
+        {step === 'sign-in' ? (
+          <>
+            have an invite?&nbsp;<b>sign up</b>
+          </>
+        ) : (
+          <>
+            have an account?&nbsp;<b>sign in</b>
+          </>
+        )}
+      </button>
+    </LockScreen>
   )
 }

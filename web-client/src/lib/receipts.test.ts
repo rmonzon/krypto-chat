@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { fakeSocket } from '../test/fakes'
-import { Receipts } from './receipts'
+import { highestPeerSeq, Receipts } from './receipts'
 
 describe('Receipts', () => {
   it('sends only receipts that raise the watermark', () => {
@@ -53,5 +53,19 @@ describe('Receipts', () => {
       { type: 'receipt.delivered', conversation_id: 'a', seq: 2 },
       { type: 'receipt.delivered', conversation_id: 'a', seq: 2 },
     ])
+  })
+})
+
+describe('highestPeerSeq', () => {
+  it('takes the highest acked seq from anyone but me, or 0', () => {
+    const messages = [
+      { sender_id: 'peer', seq: 2 },
+      { sender_id: 'peer', seq: 5 },
+      { sender_id: 'me', seq: 7 },
+      { sender_id: 'peer', seq: null },
+    ]
+    expect(highestPeerSeq(messages, 'me')).toBe(5)
+    expect(highestPeerSeq([{ sender_id: 'me', seq: 1 }], 'me')).toBe(0)
+    expect(highestPeerSeq([], 'me')).toBe(0)
   })
 })

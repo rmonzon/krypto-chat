@@ -2,6 +2,18 @@ import type { ChatSocket } from './socket'
 
 type Kind = 'delivered' | 'read'
 
+/** The highest seq among messages from anyone but myId (0 if none), e.g. to mark delivered. */
+export function highestPeerSeq(
+  messages: { sender_id: string; seq: number | null }[],
+  myId: string,
+): number {
+  let highest = 0
+  for (const m of messages) {
+    if (m.sender_id !== myId && m.seq !== null && m.seq > highest) highest = m.seq
+  }
+  return highest
+}
+
 /**
  * Tells the server how far this user has received / read each conversation.
  * Only the highest seq matters (receipts are watermarks), so it keeps the

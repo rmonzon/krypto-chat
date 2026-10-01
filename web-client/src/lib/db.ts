@@ -29,6 +29,12 @@ export function getChatDb(userId: string): ChatDb {
     db.version(4).stores({
       messages: '[sender_id+client_msg_id], conversation_id, status, expires_at',
     })
+    // [conversation_id+seq]: range reads within a conversation (unacked messages, with
+    // a null seq, aren't in it).
+    db.version(5).stores({
+      messages:
+        '[sender_id+client_msg_id], conversation_id, status, expires_at, [conversation_id+seq]',
+    })
     dbs.set(userId, db)
   }
   return db
@@ -74,6 +80,11 @@ export async function advanceChangeCursor(db: ChatDb, conversationId: string, se
     const current = (await db.change_cursors.get(conversationId))?.seq ?? 0
     if (seq > current) await db.change_cursors.put({ conversation_id: conversationId, seq })
   })
+}
+
+/** A message's identity as a string, e.g. for React keys (client_msg_id is unique per sender). */
+export function msgKey(m: Pick<Message, 'sender_id' | 'client_msg_id'>) {
+  return `${m.sender_id}:${m.client_msg_id}`
 }
 
 /** Acked messages in seq order, then pending ones in the order they were written. */

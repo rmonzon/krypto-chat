@@ -2,9 +2,9 @@ import { useState, type FormEvent } from 'react'
 import { api } from '../lib/api'
 import { inviteErrorMessage } from '../lib/invites'
 import type { Profile } from '../lib/types'
-import { Brand } from '../ui/Brand'
 import { Icon } from '../ui/Icon'
-import { MatrixRain } from '../ui/MatrixRain'
+import { LockScreen } from '../ui/LockScreen'
+import { ProfileFields } from './ProfileFields'
 
 type Props = {
   /** Details saved at sign-up, and why creating the profile from them failed. */
@@ -45,85 +45,45 @@ export function ProfileSetup({ initial = {}, onCreated }: Props) {
   }
 
   return (
-    <div className="screen lock-screen">
-      <MatrixRain opacity={0.3} />
-      <div className="lock-vapor" />
-      <div className="lock-core">
-        <div className="lock-badge">
-          <span className="lock-ring" />
-          <Icon name="user" size={28} />
+    <LockScreen
+      icon="user"
+      iconSize={28}
+      rainOpacity={0.3}
+      status={error ? <span className="err">✕ {error}</span> : <span>Choose your handle</span>}
+    >
+      <form className={'lock-form ' + (error ? 'bad' : '')} onSubmit={handleSubmit}>
+        <label className="field-label" htmlFor="setup-invite">
+          Invite code
+        </label>
+        <div className="key-input">
+          <Icon name="ticket" size={16} className="ki-lead" />
+          <input
+            id="setup-invite"
+            className="invite-input"
+            placeholder="KC-XXXX-XXXX-XXXX"
+            required
+            maxLength={40}
+            spellCheck={false}
+            autoComplete="off"
+            value={inviteCode}
+            onChange={(e) => setInviteCode(e.target.value)}
+          />
         </div>
-        <Brand size={1.5} />
-        <div className="lock-status" role="status" aria-live="polite">
-          {error ? <span className="err">✕ {error}</span> : <span>Choose your handle</span>}
-        </div>
 
-        <form className={'lock-form ' + (error ? 'bad' : '')} onSubmit={handleSubmit}>
-          <label className="field-label" htmlFor="setup-invite">
-            Invite code
-          </label>
-          <div className="key-input">
-            <Icon name="ticket" size={16} className="ki-lead" />
-            <input
-              id="setup-invite"
-              className="invite-input"
-              placeholder="KC-XXXX-XXXX-XXXX"
-              required
-              maxLength={40}
-              spellCheck={false}
-              autoComplete="off"
-              value={inviteCode}
-              onChange={(e) => setInviteCode(e.target.value)}
-            />
-          </div>
+        <ProfileFields
+          idPrefix="setup"
+          username={username}
+          displayName={displayName}
+          onUsernameChange={setUsername}
+          onDisplayNameChange={setDisplayName}
+          autoFocus
+        />
 
-          <label className="field-label" htmlFor="setup-username">
-            Username
-          </label>
-          <div className="key-input">
-            <span className="ki-lead ki-at" aria-hidden="true">
-              @
-            </span>
-            <input
-              id="setup-username"
-              placeholder="lowercase, digits, _"
-              required
-              autoFocus
-              spellCheck={false}
-              autoComplete="username"
-              pattern="[a-z0-9_]{3,30}"
-              title="3–30 characters: lowercase letters, numbers, underscore"
-              aria-describedby="setup-username-hint"
-              value={username}
-              onChange={(e) => setUsername(e.target.value.toLowerCase())}
-            />
-          </div>
-          <span className="field-hint" id="setup-username-hint">
-            3–30 characters. Others find you by this, and it can’t be changed later.
-          </span>
-
-          <label className="field-label" htmlFor="setup-display-name">
-            Display name
-          </label>
-          <div className="key-input">
-            <Icon name="user" size={16} className="ki-lead" />
-            <input
-              id="setup-display-name"
-              placeholder="how you appear to peers"
-              required
-              maxLength={60}
-              autoComplete="nickname"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-            />
-          </div>
-
-          <button type="submit" className="btn-primary lock-go" disabled={busy}>
-            {busy ? <span className="spin" /> : <Icon name="shield" size={16} />}
-            Create identity
-          </button>
-        </form>
-      </div>
-    </div>
+        <button type="submit" className="btn-primary lock-go" disabled={busy}>
+          {busy ? <span className="spin" /> : <Icon name="shield" size={16} />}
+          Create identity
+        </button>
+      </form>
+    </LockScreen>
   )
 }

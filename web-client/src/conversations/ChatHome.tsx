@@ -3,30 +3,22 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { api } from '../lib/api'
 import { advanceMyRead, compareConversations, putConversations, type ChatDb } from '../lib/db'
 import { changeMessage } from '../lib/edits'
-import { applyServerEvent, inOrder } from '../lib/events'
-import { purgeExpired } from '../lib/expiry'
 import { loadLatestMessages, loadOlderMessages } from '../lib/history'
-import { Outbox } from '../lib/outbox'
-import { Receipts } from '../lib/receipts'
-import { ChatSocket, type ConnectionStatus } from '../lib/socket'
-import { Syncer } from '../lib/sync'
-import { TypingSender, TypingTracker } from '../lib/typing'
+import { highestPeerSeq } from '../lib/receipts'
+import type { ConnectionStatus } from '../lib/socket'
 import { supabase } from '../lib/supabase'
 import { Brand } from '../ui/Brand'
 import { Clock } from '../ui/Clock'
 import { Icon } from '../ui/Icon'
-import type { Conversation, Message, Profile, ServerEvent } from '../lib/types'
+import type { Conversation, Message, Profile } from '../lib/types'
 import { AddPeerScreen } from '../invites/AddPeerScreen'
 import { IdentityScreen } from '../profile/IdentityScreen'
 import { UserSearch } from '../users/UserSearch'
 import { ComposeScreen, type Recipient } from './ComposeScreen'
 import { ConversationList } from './ConversationList'
 import { ConversationView } from './ConversationView'
-
-// How often local copies of expired messages are deleted (views hide them on time regardless).
-const PURGE_INTERVAL_MS = 5_000
-
-const getToken = async () => (await supabase.auth.getSession()).data.session?.access_token ?? null
+import { EmptyState } from './EmptyState'
+import { useChatClient } from './useChatClient'
 
 type Pane = 'chat' | 'compose' | 'addpeer' | 'identity'
 
@@ -37,15 +29,10 @@ const statusText: Record<ConnectionStatus, string> = {
 }
 
 export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
-  const [socket] = useState(() => new ChatSocket(getToken))
-  const [outbox] = useState(() => new Outbox(db, socket, profile.id))
-  const [receipts] = useState(() => new Receipts(socket))
-  const [syncer] = useState(() => new Syncer(db, profile.id, receipts))
-  const [typingSender] = useState(() => new TypingSender(socket))
-  const [typingTracker] = useState(() => new TypingTracker())
-  // Conversations where the peer is typing right now.
-  const [peerTyping, setPeerTyping] = useState<ReadonlySet<string>>(() => typingTracker.current())
-  const [connection, setConnection] = useState<ConnectionStatus>(socket.status)
+  const { socket, outbox, receipts, typingSender, connection, peerTyping } = useChatClient(
+    db,
+    profile.id,
+  )
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // What the main pane shows besides a conversation.
   const [pane, setPane] = useState<Pane>('chat')
@@ -57,76 +44,6 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
     async () => (await db.conversations.toArray()).sort(compareConversations),
     [db],
   )
-
-  const loadConversations = useCallback(async () => {
-    try {
-      const { conversations } = await api<{ conversations: Conversation[] }>('/conversations')
-      await putConversations(db, conversations)
-    } catch {
-      // Offline: the cached list is still shown.
-    }
-  }, [db])
-
-  useEffect(() => {
-    void loadConversations()
-  }, [loadConversations])
-
-  useEffect(() => {
-    const offStatus = socket.onStatus((status) => {
-      setConnection(status)
-      if (status !== 'online') {
-        // Stops can't arrive (or be sent) while disconnected.
-        typingTracker.clearAll()
-        typingSender.reset()
-      }
-      if (status === 'online') {
-        // Resend what we owe the server, then catch up on what we missed.
-        outbox.onOnline()
-        receipts.onOnline()
-        void syncer.run()
-      }
-    })
-    const handleEvent = inOrder((event: ServerEvent) =>
-      applyServerEvent(event, {
-        db,
-        myId: profile.id,
-        outbox,
-        receipts,
-        typing: typingTracker,
-        refreshConversations: loadConversations,
-      }),
-    )
-    const offEvent = socket.onEvent((event) => void handleEvent(event))
-    const offTyping = typingTracker.subscribe(setPeerTyping)
-    outbox.start()
-    socket.start()
-    return () => {
-      offStatus()
-      offEvent()
-      offTyping()
-      typingTracker.clearAll()
-      socket.stop()
-      outbox.stop()
-    }
-  }, [
-    socket,
-    outbox,
-    receipts,
-    syncer,
-    typingSender,
-    typingTracker,
-    db,
-    profile.id,
-    loadConversations,
-  ])
-
-  // Auto-delete: remove expired messages from the local DB too, not just from view.
-  useEffect(() => {
-    const purge = () => void purgeExpired(db).catch(() => {})
-    purge()
-    const timer = setInterval(purge, PURGE_INTERVAL_MS)
-    return () => clearInterval(timer)
-  }, [db])
 
   // Leaving a conversation (or signing out) stops any "typing" we announced there.
   useEffect(() => {
@@ -141,8 +58,8 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
     loadLatestMessages(db, selectedId)
       .then((messages) => {
         setLoaded((prev) => ({ ...prev, [selectedId]: true }))
-        const peerSeqs = messages.filter((m) => m.sender_id !== profile.id).map((m) => m.seq)
-        if (peerSeqs.length) receipts.markDelivered(selectedId, Math.max(...peerSeqs))
+        const peerSeq = highestPeerSeq(messages, profile.id)
+        if (peerSeq) receipts.markDelivered(selectedId, peerSeq)
       })
       .catch(() => setError('Could not load messages. Showing cached history.'))
   }, [selectedId, loaded, db, profile.id, receipts])
@@ -391,30 +308,6 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
           <EmptyState />
         )}
       </main>
-    </div>
-  )
-}
-
-function EmptyState() {
-  return (
-    <div className="empty-state">
-      <span className="es-glyph" aria-hidden="true">
-        <svg
-          width="56"
-          height="56"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M12 2 4 5.5v6c0 4.6 3.2 7.6 8 8.9 4.8-1.3 8-4.3 8-8.9v-6L12 2Z" />
-          <path d="M9 11.5 11 13.5 15.5 9" />
-        </svg>
-      </span>
-      <h3>No channel selected</h3>
-      <p>Choose a channel from the left, or search for a username to open a new one.</p>
     </div>
   )
 }

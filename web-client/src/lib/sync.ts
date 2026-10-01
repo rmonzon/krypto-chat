@@ -6,7 +6,7 @@ import {
   putServerMessages,
   type ChatDb,
 } from './db'
-import type { Receipts } from './receipts'
+import { highestPeerSeq, type Receipts } from './receipts'
 import type { ServerMessage, SyncResponse } from './types'
 
 // Safety valve for a very long offline period: each page is up to 100
@@ -89,8 +89,8 @@ export class Syncer {
       }
 
       for (const [conversationId, messages] of received) {
-        const peerSeqs = messages.filter((m) => m.sender_id !== this.userId).map((m) => m.seq)
-        if (peerSeqs.length) this.receipts.markDelivered(conversationId, Math.max(...peerSeqs))
+        const peerSeq = highestPeerSeq(messages, this.userId)
+        if (peerSeq) this.receipts.markDelivered(conversationId, peerSeq)
       }
 
       if (!res.has_more) return

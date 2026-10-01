@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { fnv1a } from './hash'
 
 const GRID = 7
 
@@ -29,12 +30,6 @@ export function Identicon({ seed, size = 96 }: { seed: string; size?: number }) 
       ))}
     </svg>
   )
-}
-
-function fnv1a(text: string) {
-  let h = 0x811c9dc5
-  for (const ch of text) h = Math.imul(h ^ ch.charCodeAt(0), 0x01000193) >>> 0
-  return h
 }
 
 /** Small seeded PRNG: uniform floats in [0, 1). */

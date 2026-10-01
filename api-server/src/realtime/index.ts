@@ -12,7 +12,7 @@ import {
   SYSTEM_CONTENT_PREFIX,
   type SendMessageInput,
 } from "../messages/service.js";
-import { hasNul } from "../validation.js";
+import { hasNul, MAX_BODY_LENGTH } from "../validation.js";
 import { addConnection, notifyUser, removeConnection, sendEvent } from "./connections.js";
 
 // Real-time module. The rest of the app should only talk to it through the
@@ -39,7 +39,7 @@ function parseSendMessage(event: Record<string, unknown>): SendMessageInput | un
   if (hasNul(content_type)) return undefined;
   // Reserved for notices the server posts (e.g. auto-delete changes).
   if (content_type.startsWith(SYSTEM_CONTENT_PREFIX)) return undefined;
-  if (typeof body !== "string" || body.length < 1 || body.length > 10_000) return undefined;
+  if (typeof body !== "string" || body.length < 1 || body.length > MAX_BODY_LENGTH) return undefined;
   if (hasNul(body)) return undefined;
   return { client_msg_id, conversation_id, content_type, body };
 }

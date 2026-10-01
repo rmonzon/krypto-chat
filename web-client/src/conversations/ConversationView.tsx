@@ -1,23 +1,19 @@
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type FormEvent,
-} from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { compareMessages, type ChatDb } from '../lib/db'
+import { compareMessages, msgKey, type ChatDb } from '../lib/db'
 import { canChange, changeErrorMessage } from '../lib/edits'
+import { isExpired, ttlLabel, ttlNotice } from '../lib/expiry'
 import type { OlderPage } from '../lib/history'
-import { isExpired, TTL_OPTIONS, ttlLabel, ttlNotice, ttlNoticeText } from '../lib/expiry'
-import { deliveryState, type DeliveryState } from '../lib/status'
-import { dayKey, formatDayLabel, formatTime } from '../lib/time'
+import { highestPeerSeq } from '../lib/receipts'
+import { deliveryState } from '../lib/status'
+import { dayKey } from '../lib/time'
 import type { Conversation, Message } from '../lib/types'
 import { Avatar } from '../ui/Avatar'
 import { userColor } from '../ui/colors'
-import { Icon, type IconName } from '../ui/Icon'
+import { Icon } from '../ui/Icon'
+import { DayDivider, MessageRow, NoticeRow, TypingRow } from './MessageRows'
+import { TtlMenu } from './TtlMenu'
+import { useOlderHistory } from './useOlderHistory'
 
 type Props = {
   db: ChatDb
@@ -54,19 +50,6 @@ const EDIT_WINDOW_TICK_MS = 10_000
 // Longest wait between re-renders while messages are due to expire (setTimeout overflows past ~24 days).
 const MAX_EXPIRY_WAIT_MS = 60_000
 
-const msgKey = (m: Message) => `${m.sender_id}:${m.client_msg_id}`
-
-type Status = { label: string; icon: IconName; tone?: 'pending' | 'read' | 'failed' }
-
-const STATUS: Record<DeliveryState, Status> = {
-  sending: { label: 'Sending', icon: 'clock', tone: 'pending' },
-  queued: { label: 'Queued until online', icon: 'clock', tone: 'pending' },
-  failed: { label: 'Failed to send · retry', icon: 'alert', tone: 'failed' },
-  read: { label: 'Read', icon: 'check2', tone: 'read' },
-  delivered: { label: 'Delivered', icon: 'check2' },
-  sent: { label: 'Sent', icon: 'check' },
-}
-
 export function ConversationView({
   db,
   conversation,
@@ -88,13 +71,11 @@ export function ConversationView({
   const [draft, setDraft] = useState('')
   // The message being edited in the compose dock, and the draft it replaced.
   const [editing, setEditing] = useState<Message | null>(null)
-  const savedDraft = useRef('')
+  const [savedDraft, setSavedDraft] = useState('')
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null)
   const [changeBusy, setChangeBusy] = useState(false)
   const [changeError, setChangeError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const [ttlMenuOpen, setTtlMenuOpen] = useState(false)
-  const ttlMenuRef = useRef<HTMLDivElement>(null)
   const messages = useLiveQuery(
     async () =>
       (await db.messages.where('conversation_id').equals(conversation.id).toArray()).sort(
@@ -103,13 +84,12 @@ export function ConversationView({
     [db, conversation.id],
   ) ?? NO_MESSAGES
   const listRef = useRef<HTMLOListElement>(null)
-  const topRef = useRef<HTMLLIElement>(null)
   const bottomRef = useRef<HTMLLIElement>(null)
 
   // Jump to the bottom when a message is appended (sent, received, or first
   // load), but not when older history is prepended above.
   const last = messages.at(-1)
-  const lastKey = last ? `${last.sender_id}:${last.client_msg_id}` : null
+  const lastKey = last ? msgKey(last) : null
   useLayoutEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' })
   }, [lastKey])
@@ -123,64 +103,15 @@ export function ConversationView({
     }
   }, [peerTyping])
 
-  // Seqs start at 1, so the oldest being 1 means there's nothing older. Above
-  // 1 there may be (or the rest expired): ask until the server says that's all.
-  const seqs = messages.filter((m) => m.seq !== null).map((m) => m.seq!)
-  const oldestSeq = seqs.length ? Math.min(...seqs) : null
-  const [noOlder, setNoOlder] = useState(false)
-  const hasOlder = oldestSeq !== null && oldestSeq > 1 && !noOlder
-  const [loadingOlder, setLoadingOlder] = useState(false)
-  const [olderFailed, setOlderFailed] = useState(false)
-  // Scroll position captured before prepending, restored once the list grows.
-  const anchor = useRef<{ height: number; top: number } | null>(null)
-
-  const loadOlder = useCallback(async () => {
-    const list = listRef.current
-    if (!list || !hasOlder || loadingOlder) return
-    anchor.current = { height: list.scrollHeight, top: list.scrollTop }
-    setLoadingOlder(true)
-    setOlderFailed(false)
-    try {
-      const page = await onLoadOlder(oldestSeq)
-      if (page.count === 0) anchor.current = null
-      if (!page.hasMore) setNoOlder(true)
-    } catch {
-      anchor.current = null
-      setOlderFailed(true)
-    } finally {
-      setLoadingOlder(false)
-    }
-  }, [hasOlder, loadingOlder, oldestSeq, onLoadOlder])
-
-  // Keep the reader's place: shift scrollTop by however much was added above.
-  useLayoutEffect(() => {
-    const list = listRef.current
-    const saved = anchor.current
-    if (!list || !saved || list.scrollHeight === saved.height) return
-    list.scrollTop = saved.top + (list.scrollHeight - saved.height)
-    anchor.current = null
-  }, [messages])
-
-  // Load older history when the top of the list scrolls into view.
-  useEffect(() => {
-    const list = listRef.current
-    const top = topRef.current
-    if (!list || !top || !hasOlder || olderFailed) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) void loadOlder()
-      },
-      { root: list, rootMargin: '200px 0px 0px 0px' },
-    )
-    observer.observe(top)
-    return () => observer.disconnect()
-  }, [hasOlder, olderFailed, loadOlder])
+  const {
+    topRef,
+    loading: loadingOlder,
+    failed: olderFailed,
+    loadOlder,
+  } = useOlderHistory(listRef, messages, onLoadOlder)
 
   // Mark the peer's latest message read while this conversation is on screen.
-  const latestPeerSeq = Math.max(
-    0,
-    ...messages.filter((m) => m.sender_id !== myId && m.seq !== null).map((m) => m.seq!),
-  )
+  const latestPeerSeq = highestPeerSeq(messages, myId)
   useEffect(() => {
     if (!latestPeerSeq) return
     const markIfVisible = () => {
@@ -210,16 +141,8 @@ export function ConversationView({
   // Hidden the moment they expire; the purge in ChatHome deletes them a few seconds later.
   const visible = messages.filter((m) => !isExpired(m, now))
 
-  // Stop editing if the message gets deleted or expires meanwhile.
-  const editingDeleted =
-    editing !== null &&
-    messages.some((m) => msgKey(m) === msgKey(editing) && (m.deleted_at || isExpired(m, now)))
-  useEffect(() => {
-    if (editingDeleted) stopEditing()
-  }, [editingDeleted])
-
   function startEditing(m: Message) {
-    if (!editing) savedDraft.current = draft
+    if (!editing) setSavedDraft(draft)
     onDraftChange('') // editing isn't typing a new message
     setEditing(m)
     setDraft(m.body)
@@ -230,9 +153,16 @@ export function ConversationView({
 
   function stopEditing() {
     setEditing(null)
-    setDraft(savedDraft.current)
-    savedDraft.current = ''
+    setDraft(savedDraft)
+    setSavedDraft('')
   }
+
+  // Stop editing if the message gets deleted or expires meanwhile (adjusted
+  // during render: it's derived from the messages, no effect needed).
+  const editingDeleted =
+    editing !== null &&
+    messages.some((m) => msgKey(m) === msgKey(editing) && (m.deleted_at || isExpired(m, now)))
+  if (editingDeleted) stopEditing()
 
   async function runChange(change: () => Promise<void>) {
     setChangeBusy(true)
@@ -248,26 +178,7 @@ export function ConversationView({
     }
   }
 
-  // Close the auto-delete menu on Escape or a click outside it.
-  useEffect(() => {
-    if (!ttlMenuOpen) return
-    const onPointer = (e: PointerEvent) => {
-      if (!ttlMenuRef.current?.contains(e.target as Node)) setTtlMenuOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setTtlMenuOpen(false)
-    }
-    document.addEventListener('pointerdown', onPointer)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('pointerdown', onPointer)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [ttlMenuOpen])
-
   async function chooseTtl(ttlSeconds: number | null) {
-    setTtlMenuOpen(false)
-    if (ttlSeconds === conversation.message_ttl_seconds) return
     setChangeError(null)
     try {
       await onSetTtl(ttlSeconds)
@@ -314,39 +225,7 @@ export function ConversationView({
             </span>
           </div>
         </div>
-        <div className="ttl-control" ref={ttlMenuRef}>
-          <button
-            type="button"
-            className={'icon-btn' + (ttl !== null ? ' ttl-on' : '')}
-            title={online ? 'Auto-delete messages' : 'Auto-delete (needs a connection)'}
-            aria-label={`Auto-delete messages: ${ttl === null ? 'off' : ttlLabel(ttl)}`}
-            aria-haspopup="menu"
-            aria-expanded={ttlMenuOpen}
-            disabled={!online}
-            onClick={() => setTtlMenuOpen((open) => !open)}
-          >
-            <Icon name="timer" size={18} />
-            {ttl !== null && <span className="ttl-short">{ttlLabel(ttl, true)}</span>}
-          </button>
-          {ttlMenuOpen && (
-            <div className="ttl-menu" role="menu" aria-label="Auto-delete new messages after">
-              <p className="ttl-menu-title">auto-delete new messages</p>
-              {[null, ...TTL_OPTIONS.map((o) => o.seconds)].map((seconds) => (
-                <button
-                  key={seconds ?? 'off'}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={seconds === ttl}
-                  className={'ttl-option' + (seconds === ttl ? ' current' : '')}
-                  onClick={() => void chooseTtl(seconds)}
-                >
-                  {seconds === null ? 'off' : `after ${ttlLabel(seconds)}`}
-                </button>
-              ))}
-              <p className="ttl-menu-note">applies to messages sent from now on, for both of you.</p>
-            </div>
-          )}
-        </div>
+        <TtlMenu ttl={ttl} online={online} onChoose={(t) => void chooseTtl(t)} />
       </header>
 
       <ol className="msg-scroll" ref={listRef}>
@@ -364,150 +243,52 @@ export function ConversationView({
         )}
         {visible.map((m, i) => {
           const mine = m.sender_id === myId
+          const key = msgKey(m)
           const day = dayKey(m.created_at)
-          const newDay = i === 0 || dayKey(visible[i - 1].created_at) !== day
+          const divider = (i === 0 || dayKey(visible[i - 1].created_at) !== day) && (
+            <DayDivider day={day} at={m.created_at} />
+          )
           const notice = ttlNotice(m)
           if (notice !== undefined) {
             return (
-              <Fragment key={msgKey(m)}>
-                {newDay && (
-                  <li className="thread-day">
-                    <time dateTime={day}>— {formatDayLabel(m.created_at)} —</time>
-                  </li>
-                )}
-                <li className="thread-notice">
-                  <Icon name="timer" size={12} /> {mine ? 'you' : `@${peer.username}`}{' '}
-                  {ttlNoticeText(notice)} · {formatTime(m.created_at)}
-                </li>
+              <Fragment key={key}>
+                {divider}
+                <NoticeRow
+                  who={mine ? 'you' : `@${peer.username}`}
+                  ttlSeconds={notice}
+                  at={m.created_at}
+                />
               </Fragment>
             )
           }
-          const deleted = Boolean(m.deleted_at)
-          const status = mine && !deleted ? STATUS[deliveryState(m, conversation, online)] : null
-          const key = msgKey(m)
-          const changeable = online && canChange(m, myId, now)
+          const delivery =
+            mine && !m.deleted_at ? deliveryState(m, conversation, online) : undefined
           return (
             <Fragment key={key}>
-              {newDay && (
-                <li className="thread-day">
-                  <time dateTime={day}>— {formatDayLabel(m.created_at)} —</time>
-                </li>
-              )}
-              <li
-                className={
-                  `msg ${mine ? 'mine' : 'theirs'}` +
-                  (m.status === 'sending' ? ' pending' : '') +
-                  (editing && msgKey(editing) === key ? ' editing' : '')
-                }
-              >
-                <span className="log-meta">
-                  <time className="log-ts" dateTime={m.created_at}>
-                    [{formatTime(m.created_at)}]
-                  </time>
-                  <span className="log-who" style={mine ? undefined : { color: peerColor }}>
-                    &lt;{mine ? myUsername : peer.username}&gt;
-                  </span>
-                  {m.expires_at && (
-                    <span
-                      className="msg-expiry"
-                      title={`disappears ${formatDayLabel(m.expires_at).toLowerCase()} at ${formatTime(m.expires_at)}`}
-                      role="img"
-                      aria-label={`Disappears at ${formatTime(m.expires_at)}`}
-                    >
-                      <Icon name="timer" size={11} />
-                    </span>
-                  )}
-                </span>
-                <span className="msg-body">
-                  {deleted ? <span className="msg-deleted">message deleted</span> : m.body}
-                  {m.edited_at && !deleted && (
-                    <span className="msg-edited" title={`edited ${formatTime(m.edited_at)}`}>
-                      {' '}
-                      (edited)
-                    </span>
-                  )}
-                  {status &&
-                    (status.tone === 'failed' ? (
-                      <button type="button" className="msg-status failed" onClick={() => onRetry(m)}>
-                        <Icon name={status.icon} size={12} /> {status.label}
-                      </button>
-                    ) : (
-                      <span
-                        className={`msg-status ${status.tone ?? ''}`}
-                        title={status.label}
-                        role="img"
-                        aria-label={status.label}
-                      >
-                        <Icon name={status.icon} size={12} />
-                      </span>
-                    ))}
-                </span>
-                {changeable &&
-                  (confirmingDelete === key ? (
-                    <span className="msg-actions confirming" role="group" aria-label="Confirm delete">
-                      <span className="msg-confirm-q">delete for everyone?</span>
-                      <button
-                        type="button"
-                        className="msg-act danger"
-                        disabled={changeBusy}
-                        onClick={() => void confirmDelete(m)}
-                      >
-                        yes
-                      </button>
-                      <button
-                        type="button"
-                        className="msg-act"
-                        disabled={changeBusy}
-                        onClick={() => setConfirmingDelete(null)}
-                      >
-                        no
-                      </button>
-                    </span>
-                  ) : (
-                    <span className="msg-actions">
-                      <button
-                        type="button"
-                        className="msg-act"
-                        aria-label="Edit message"
-                        onClick={() => startEditing(m)}
-                      >
-                        edit
-                      </button>
-                      <button
-                        type="button"
-                        className="msg-act danger"
-                        aria-label="Delete message"
-                        onClick={() => {
-                          setChangeError(null)
-                          setConfirmingDelete(key)
-                        }}
-                      >
-                        del
-                      </button>
-                    </span>
-                  ))}
-              </li>
+              {divider}
+              <MessageRow
+                message={m}
+                mine={mine}
+                username={mine ? myUsername : peer.username}
+                color={peerColor}
+                delivery={delivery}
+                editing={editing !== null && msgKey(editing) === key}
+                changeable={online && canChange(m, myId, now)}
+                confirmingDelete={confirmingDelete === key}
+                busy={changeBusy}
+                onRetry={() => onRetry(m)}
+                onEdit={() => startEditing(m)}
+                onAskDelete={() => {
+                  setChangeError(null)
+                  setConfirmingDelete(key)
+                }}
+                onConfirmDelete={() => void confirmDelete(m)}
+                onCancelDelete={() => setConfirmingDelete(null)}
+              />
             </Fragment>
           )
         })}
-        {peerTyping && (
-          <li className="msg theirs typing-row" role="status">
-            <span className="log-meta">
-              <span className="log-ts">[{formatTime(new Date().toISOString())}]</span>
-              <span className="log-who" style={{ color: peerColor }}>
-                &lt;{peer.username}&gt;
-              </span>
-            </span>
-            <span className="typing-line">
-              <span className="typing-dots" aria-hidden="true">
-                <i />
-                <i />
-                <i />
-              </span>
-              <span className="typing-cue">typing…</span>
-            </span>
-          </li>
-        )}
+        {peerTyping && <TypingRow username={peer.username} color={peerColor} />}
         <li ref={bottomRef} aria-hidden />
       </ol>
 

@@ -11,6 +11,7 @@ import {
   type InviteFailure,
 } from "../invites/service.js";
 import { notifyUser } from "../realtime/index.js";
+import { USERNAME_PATTERN } from "../validation.js";
 
 const codeBody = {
   body: {
@@ -26,7 +27,7 @@ async function hasProfile(userId: string) {
   return rowCount === 1;
 }
 
-const USERNAME = /^[a-z0-9_]{3,30}$/;
+const USERNAME = new RegExp(USERNAME_PATTERN);
 
 /**
  * No auth: lets the sign-up form check a code before creating the account,

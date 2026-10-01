@@ -14,40 +14,42 @@ type Props = {
 
 /** Server-side user search for starting new conversations. Renders nothing for an empty query. */
 export function UserSearch({ query, excludeIds, heading = 'New channel', onSelect }: Props) {
-  const [results, setResults] = useState<Profile[]>([])
-  const [error, setError] = useState(false)
+  // The latest response and the query it answers; users is null if the search failed.
+  const [result, setResult] = useState<{ query: string; users: Profile[] | null } | null>(null)
+  const q = query.trim()
 
   useEffect(() => {
-    const q = query.trim()
     if (!q) return
 
     // Debounce, and ignore responses for queries that are no longer current.
     let stale = false
     const timer = setTimeout(async () => {
+      let users: Profile[] | null = null
       try {
-        const { users } = await api<{ users: Profile[] }>(`/users?q=${encodeURIComponent(q)}`)
-        if (!stale) {
-          setResults(users)
-          setError(false)
-        }
+        users = (await api<{ users: Profile[] }>(`/users?q=${encodeURIComponent(q)}`)).users
       } catch {
-        if (!stale) setError(true)
+        // Shown as "Search failed" below.
       }
+      if (!stale) setResult({ query: q, users })
     }, 250)
 
     return () => {
       stale = true
       clearTimeout(timer)
     }
-  }, [query])
+  }, [q])
 
-  if (!query.trim()) return null
-  const visible = results.filter((u) => !excludeIds.has(u.id))
+  if (!q) return null
+  // Until the current query is answered, say so rather than showing another query's results.
+  const current = result?.query === q ? result : null
+  const visible = current?.users?.filter((u) => !excludeIds.has(u.id)) ?? []
 
   return (
     <section className="user-search" aria-label={heading}>
       <h2 className="list-heading">{heading}</h2>
-      {error ? (
+      {!current ? (
+        <p className="list-note">Searching…</p>
+      ) : current.users === null ? (
         <p className="list-note err">Search failed.</p>
       ) : visible.length === 0 ? (
         <p className="list-note">No other users found.</p>

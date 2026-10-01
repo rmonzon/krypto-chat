@@ -12,7 +12,7 @@ import {
   TTL_OPTIONS_SECONDS,
 } from "../messages/service.js";
 import { notifyUser } from "../realtime/index.js";
-import { NO_NUL_PATTERN } from "../validation.js";
+import { MAX_BODY_LENGTH, NO_NUL_PATTERN } from "../validation.js";
 
 const changeErrorStatus = {
   message_not_found: 404,
@@ -21,10 +21,16 @@ const changeErrorStatus = {
   edit_window_expired: 403,
 } as const;
 
+const conversationParams = {
+  type: "object",
+  required: ["id"],
+  properties: { id: { type: "string", format: "uuid" } },
+} as const;
+
 const messageParams = {
   type: "object",
   required: ["id", "seq"],
-  properties: { id: { type: "string", format: "uuid" }, seq: { type: "integer", minimum: 1 } },
+  properties: { ...conversationParams.properties, seq: { type: "integer", minimum: 1 } },
 } as const;
 
 export async function conversationRoutes(app: FastifyInstance) {
@@ -78,11 +84,7 @@ export async function conversationRoutes(app: FastifyInstance) {
     "/conversations/:id/messages",
     {
       schema: {
-        params: {
-          type: "object",
-          required: ["id"],
-          properties: { id: { type: "string", format: "uuid" } },
-        },
+        params: conversationParams,
         querystring: {
           type: "object",
           properties: {
@@ -127,7 +129,12 @@ export async function conversationRoutes(app: FastifyInstance) {
           required: ["body"],
           additionalProperties: false,
           properties: {
-            body: { type: "string", minLength: 1, maxLength: 10_000, pattern: NO_NUL_PATTERN },
+            body: {
+              type: "string",
+              minLength: 1,
+              maxLength: MAX_BODY_LENGTH,
+              pattern: NO_NUL_PATTERN,
+            },
           },
         },
       },
@@ -149,11 +156,7 @@ export async function conversationRoutes(app: FastifyInstance) {
     "/conversations/:id/ttl",
     {
       schema: {
-        params: {
-          type: "object",
-          required: ["id"],
-          properties: { id: { type: "string", format: "uuid" } },
-        },
+        params: conversationParams,
         body: {
           type: "object",
           required: ["ttl_seconds"],
