@@ -30,6 +30,27 @@ pnpm dev               # http://localhost:5173, proxies /api and /ws to the API 
 
 Keep credentials (database password, keys) in the `.env` files only. They're git-ignored.
 
+## Deploying
+
+Not deployed yet. When it is, go through this list. The design (one API instance, same-origin routing) is described in [architecture.md](architecture.md).
+
+**Supabase**
+- [ ] Use a separate Supabase project for production, not the dev one.
+- [ ] Disable its Data API. Nothing uses it, and RLS (enabled by the migrations) is only a backup.
+- [ ] In Auth settings, set the Site URL and redirect URLs to the production web URL, so sign-up confirmation emails link there.
+
+**api-server**
+- [ ] Set `DATABASE_URL` to the production **session pooler** URL (not the transaction pooler on port 6543) and `SUPABASE_URL` to the production project. See `.env.example`.
+- [ ] Run `pnpm migrate` against production before starting the new version.
+- [ ] Build with `pnpm build`, run with `pnpm start`. `start` reads a `.env` file (`node --env-file=.env`) and won't start without one. On a host that injects environment variables, create the file or change the script.
+- [ ] **If the API runs behind a reverse proxy or load balancer, set `TRUST_PROXY`** (`true`, or the proxies' IPs/CIDRs). Otherwise every client shares the proxy's IP, and with it one rate limit on the invite routes.
+- [ ] Run exactly **one instance**. Open sockets and rate-limit counts live in memory; a second instance needs Redis (pub/sub for `notifyUser`, a shared rate-limit store).
+- [ ] Let the first person in with an admin invite: `pnpm invite:create` with the production `DATABASE_URL`.
+
+**web-client**
+- [ ] Build with the production `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. Vite bakes them in at build time.
+- [ ] Serve `dist/` as a single-page app, and route the API on the same origin, like the dev proxy does. `/api/*` goes to the API server with the `/api` prefix removed, and `/ws` goes to it as a WebSocket. Serve over HTTPS: the client then uses `wss://`.
+
 ## Tests and checks
 Both apps have automated tests, run with [Vitest](https://vitest.dev), and are linted with [oxlint](https://oxc.rs). Run them from each project's folder:
 
