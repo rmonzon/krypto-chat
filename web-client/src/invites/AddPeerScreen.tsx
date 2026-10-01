@@ -60,7 +60,7 @@ function SharePanel({
   const [failed, setFailed] = useState(false)
   const [copied, setCopied] = useState(false)
   const [now, setNow] = useState(() => Date.now())
-  // Bumped by "new". Each generation requests a fresh code; the server revokes older ones.
+  // Bumped by "new". Each generation requests a fresh code; older ones stay valid until they expire.
   const [generation, setGeneration] = useState(0)
 
   useEffect(() => {

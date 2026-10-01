@@ -121,10 +121,8 @@ export function ChatHome({ profile, db }: { profile: Profile; db: ChatDb }) {
           // Edited or deleted. Older history that isn't loaded arrives current when fetched.
           await putServerMessages(db, [event.message], { onlyExisting: true })
           break
+        // invite.redeemed: someone used our invite; the Add peer screen reacts to it too.
         case 'invite.redeemed':
-          // Someone redeemed our invite; the Add peer screen reacts to it too.
-          await putConversations(db, [event.conversation])
-          break
         case 'conversation.new':
         case 'conversation.updated':
           await putConversations(db, [event.conversation])

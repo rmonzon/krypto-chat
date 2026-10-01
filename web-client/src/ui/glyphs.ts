@@ -1,5 +1,5 @@
 // Glyph pool for cipher effects: half-width katakana + latin + digits + terminal symbols.
-export const GLYPHS = Array.from(
+const GLYPHS = Array.from(
   'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ' +
     'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789' +
     '#%&@$?/\\<>=*+~^|{}[]()!:;-_',

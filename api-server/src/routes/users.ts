@@ -15,8 +15,11 @@ export async function userRoutes(app: FastifyInstance) {
       },
     },
     async (request) => {
+      const q = request.query.q.trim();
+      // Whitespace only would become an empty prefix that matches everyone.
+      if (!q) return { users: [] };
       // Escape LIKE wildcards; `_` is valid in usernames.
-      const prefix = request.query.q.trim().toLowerCase().replace(/[\\%_]/g, "\\$&");
+      const prefix = q.toLowerCase().replace(/[\\%_]/g, "\\$&");
       const { rows } = await pool.query(
         `select id, username, display_name from profiles
          where username like $1 and id <> $2

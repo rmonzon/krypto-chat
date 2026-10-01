@@ -511,23 +511,6 @@ body {
   color: var(--textdim);
 }
 
-.lock-foot {
-  position: absolute;
-  bottom: 18px;
-  z-index: 2;
-  display: flex;
-  gap: 22px;
-  font-size: 10.5px;
-  color: var(--muted);
-  letter-spacing: 0.1em;
-}
-
-.lock-foot span {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
 .spin {
   width: 13px;
   height: 13px;

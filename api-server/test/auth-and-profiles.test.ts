@@ -98,4 +98,11 @@ describe("user search", () => {
     const percent = await request("GET", "/users?q=%25", { token: me.token });
     expect(percent.body.users).toEqual([]);
   });
+
+  it("returns nobody for a whitespace-only query", async () => {
+    const me = await createUser("searcher");
+    await createUser("alice");
+    const res = await request("GET", "/users?q=%20%20", { token: me.token });
+    expect(res).toEqual({ status: 200, body: { users: [] } });
+  });
 });
