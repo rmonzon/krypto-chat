@@ -1,4 +1,4 @@
-import { api } from './api'
+import { api, ApiError } from './api'
 import { putServerMessages, type ChatDb } from './db'
 import { isExpired, ttlNotice } from './expiry'
 import type { Message, ServerMessage } from './types'
@@ -20,6 +20,16 @@ export function canChange(m: Message, myId: string, now: number) {
     !isExpired(m, now) &&
     now - Date.parse(m.created_at) < EDIT_WINDOW_MS
   )
+}
+
+/** User-facing text for a failed edit or delete. */
+export function changeErrorMessage(err: unknown): string {
+  const code = err instanceof ApiError ? err.code : null
+  if (code === 'edit_window_expired') {
+    return `too late: messages can only be changed for ${EDIT_WINDOW_MS / 60_000} minutes.`
+  }
+  if (code === 'message_deleted') return 'that message was already deleted.'
+  return 'couldn’t save the change. check your connection and try again.'
 }
 
 /** Edits (body) or deletes (null) a message on the server, then stores the result. */

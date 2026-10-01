@@ -8,11 +8,11 @@ import {
   type FormEvent,
 } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { ApiError } from '../lib/api'
 import { compareMessages, type ChatDb } from '../lib/db'
-import { canChange } from '../lib/edits'
+import { canChange, changeErrorMessage } from '../lib/edits'
 import type { OlderPage } from '../lib/history'
 import { isExpired, TTL_OPTIONS, ttlLabel, ttlNotice, ttlNoticeText } from '../lib/expiry'
+import { deliveryState, type DeliveryState } from '../lib/status'
 import { dayKey, formatDayLabel, formatTime } from '../lib/time'
 import type { Conversation, Message } from '../lib/types'
 import { Avatar } from '../ui/Avatar'
@@ -56,33 +56,15 @@ const MAX_EXPIRY_WAIT_MS = 60_000
 
 const msgKey = (m: Message) => `${m.sender_id}:${m.client_msg_id}`
 
-function changeErrorText(err: unknown) {
-  const code = err instanceof ApiError ? err.code : null
-  if (code === 'edit_window_expired') return 'too late: messages can only be changed for 15 minutes.'
-  if (code === 'message_deleted') return 'that message was already deleted.'
-  return 'couldn’t save the change. check your connection and try again.'
-}
-
 type Status = { label: string; icon: IconName; tone?: 'pending' | 'read' | 'failed' }
 
-/** Delivery state of one of my messages. Delivered/read come from the peer's watermarks. */
-function messageStatus(m: Message, conversation: Conversation, online: boolean): Status {
-  switch (m.status) {
-    case 'sending':
-      return online
-        ? { label: 'Sending', icon: 'clock', tone: 'pending' }
-        : { label: 'Queued until online', icon: 'clock', tone: 'pending' }
-    case 'failed':
-      return { label: 'Failed to send · retry', icon: 'alert', tone: 'failed' }
-    case 'sent':
-      if (m.seq !== null && m.seq <= conversation.peer_read_up_to_seq) {
-        return { label: 'Read', icon: 'check2', tone: 'read' }
-      }
-      if (m.seq !== null && m.seq <= conversation.peer_delivered_up_to_seq) {
-        return { label: 'Delivered', icon: 'check2' }
-      }
-      return { label: 'Sent', icon: 'check' }
-  }
+const STATUS: Record<DeliveryState, Status> = {
+  sending: { label: 'Sending', icon: 'clock', tone: 'pending' },
+  queued: { label: 'Queued until online', icon: 'clock', tone: 'pending' },
+  failed: { label: 'Failed to send · retry', icon: 'alert', tone: 'failed' },
+  read: { label: 'Read', icon: 'check2', tone: 'read' },
+  delivered: { label: 'Delivered', icon: 'check2' },
+  sent: { label: 'Sent', icon: 'check' },
 }
 
 export function ConversationView({
@@ -259,7 +241,7 @@ export function ConversationView({
       await change()
       return true
     } catch (err) {
-      setChangeError(changeErrorText(err))
+      setChangeError(changeErrorMessage(err))
       return false
     } finally {
       setChangeBusy(false)
@@ -401,7 +383,7 @@ export function ConversationView({
             )
           }
           const deleted = Boolean(m.deleted_at)
-          const status = mine && !deleted ? messageStatus(m, conversation, online) : null
+          const status = mine && !deleted ? STATUS[deliveryState(m, conversation, online)] : null
           const key = msgKey(m)
           const changeable = online && canChange(m, myId, now)
           return (

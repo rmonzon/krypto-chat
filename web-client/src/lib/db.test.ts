@@ -4,6 +4,7 @@ import {
   advanceChangeCursor,
   advanceCursor,
   advanceMyRead,
+  advancePeerReceipts,
   compareConversations,
   compareMessages,
   deleteChatDb,
@@ -90,6 +91,35 @@ describe('advanceMyRead', () => {
     await advanceMyRead(db, 'conv-1', 4)
 
     expect((await db.conversations.get('conv-1'))?.my_read_up_to_seq).toBe(5)
+  })
+})
+
+describe('advancePeerReceipts', () => {
+  it('moves each of the peer’s watermarks forward independently, never back', async () => {
+    const db = freshDb()
+    await db.conversations.put(
+      conversation({ peer_delivered_up_to_seq: 4, peer_read_up_to_seq: 2 }),
+    )
+
+    await advancePeerReceipts(db, 'conv-1', 3, 3)
+
+    expect(await db.conversations.get('conv-1')).toMatchObject({
+      peer_delivered_up_to_seq: 4,
+      peer_read_up_to_seq: 3,
+    })
+  })
+
+  it('treats watermarks missing from older cached conversations as 0', async () => {
+    const db = freshDb()
+    const { peer_delivered_up_to_seq: _d, peer_read_up_to_seq: _r, ...legacy } = conversation()
+    await db.conversations.put(legacy as Conversation)
+
+    await advancePeerReceipts(db, 'conv-1', 2, 1)
+
+    expect(await db.conversations.get('conv-1')).toMatchObject({
+      peer_delivered_up_to_seq: 2,
+      peer_read_up_to_seq: 1,
+    })
   })
 })
 
