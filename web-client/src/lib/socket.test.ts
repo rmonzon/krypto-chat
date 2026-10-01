@@ -180,6 +180,23 @@ describe('ChatSocket', () => {
     expect(old.sent).toEqual([])
   })
 
+  it('sends refreshed tokens on an authenticated connection only', async () => {
+    const { socket } = setup()
+    socket.start()
+    latest().onopen?.()
+    await settle()
+    socket.refreshToken('too-early')
+    expect(latest().sent).toEqual([{ type: 'auth', token: 'token-1' }])
+
+    latest().receive({ type: 'ready', user_id: 'me' })
+    socket.refreshToken('token-2')
+    expect(latest().sent.at(-1)).toEqual({ type: 'auth', token: 'token-2' })
+
+    latest().drop()
+    socket.refreshToken('token-3')
+    expect(latest().sent.at(-1)).toEqual({ type: 'auth', token: 'token-2' })
+  })
+
   it('stop() closes the connection and never reconnects', async () => {
     const { socket } = setup()
     socket.start()

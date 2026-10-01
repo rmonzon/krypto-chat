@@ -62,6 +62,15 @@ export class ChatSocket {
     return true
   }
 
+  /**
+   * Hands the server a refreshed access token, so it doesn't close the
+   * connection when the old one expires. Does nothing unless authenticated:
+   * a new connection fetches a current token anyway.
+   */
+  refreshToken(token: string) {
+    if (this.ready && this.ws) this.ws.send(JSON.stringify({ type: 'auth', token }))
+  }
+
   onEvent(listener: (event: ServerEvent) => void) {
     this.eventListeners.add(listener)
     return () => this.eventListeners.delete(listener)

@@ -17,6 +17,8 @@ import { addConnection, notifyUser, removeConnection, sendEvent } from "./connec
 export { notifyUser } from "./connections.js";
 
 const CLOSE_UNAUTHORIZED = 4401;
+// setTimeout fires at once for delays past ~24.8 days, so longer waits are chained.
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 export type RealtimeOptions = {
   /** How long a new socket has to send its auth message. */
@@ -149,6 +151,7 @@ function handleConnection(
   { authTimeoutMs, heartbeatMs }: Required<RealtimeOptions>,
 ) {
   let userId: string | undefined;
+  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   let alive = true;
   // Handle one incoming message at a time so a client's sends keep their order.
   let queue = Promise.resolve();
@@ -169,9 +172,45 @@ function handleConnection(
 
   socket.on("close", () => {
     clearTimeout(authTimer);
+    clearTimeout(expiryTimer);
     clearInterval(heartbeat);
     if (userId) removeConnection(userId, socket);
   });
+
+  /** Closes the socket once its token expires, unless a refreshed token moves the deadline. */
+  function closeAt(expiresAt: number | undefined) {
+    clearTimeout(expiryTimer);
+    if (expiresAt === undefined) return;
+    const delay = expiresAt - Date.now();
+    expiryTimer =
+      delay > MAX_TIMEOUT_MS
+        ? setTimeout(() => closeAt(expiresAt), MAX_TIMEOUT_MS)
+        : setTimeout(() => socket.close(CLOSE_UNAUTHORIZED, "token expired"), delay);
+  }
+
+  /**
+   * The first message authenticates the socket. Later ones carry a refreshed
+   * token for the same user, which moves the expiry; anything else closes it.
+   */
+  async function authenticate(token: unknown) {
+    let verified;
+    try {
+      if (typeof token !== "string") throw new Error("no token");
+      verified = await verifyAccessToken(token);
+    } catch {
+      return socket.close(CLOSE_UNAUTHORIZED, "unauthorized");
+    }
+    if (userId && verified.userId !== userId) {
+      return socket.close(CLOSE_UNAUTHORIZED, "unauthorized");
+    }
+    closeAt(verified.expiresAt);
+    if (userId) return; // a refresh: nothing else changes
+
+    userId = verified.userId;
+    clearTimeout(authTimer);
+    addConnection(userId, socket);
+    sendEvent(socket, { type: "ready", user_id: userId });
+  }
 
   async function handleRaw(raw: string) {
     let event: Record<string, unknown>;
@@ -183,20 +222,9 @@ function handleConnection(
       return sendEvent(socket, { type: "error", reason: "invalid_json" });
     }
 
-    // The first message must be { type: "auth", token }.
-    if (!userId) {
-      if (event.type !== "auth" || typeof event.token !== "string") {
-        return socket.close(CLOSE_UNAUTHORIZED, "unauthorized");
-      }
-      try {
-        userId = await verifyAccessToken(event.token);
-      } catch {
-        return socket.close(CLOSE_UNAUTHORIZED, "unauthorized");
-      }
-      clearTimeout(authTimer);
-      addConnection(userId, socket);
-      return sendEvent(socket, { type: "ready", user_id: userId });
-    }
+    if (event.type === "auth") return authenticate(event.token);
+    // Anything before a successful auth closes the socket.
+    if (!userId) return socket.close(CLOSE_UNAUTHORIZED, "unauthorized");
 
     try {
       await handleEvent(userId, socket, event);

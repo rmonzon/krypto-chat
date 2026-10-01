@@ -72,12 +72,17 @@ export function useChatClient(db: ChatDb, myId: string) {
     )
     const offEvent = socket.onEvent((event) => void handleEvent(event))
     const offTyping = typingTracker.subscribe(setPeerTyping)
+    // The server closes the socket when its token expires; pass refreshed ones along.
+    const { data: auth } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'TOKEN_REFRESHED' && session) socket.refreshToken(session.access_token)
+    })
     outbox.start()
     socket.start()
     return () => {
       offStatus()
       offEvent()
       offTyping()
+      auth.subscription.unsubscribe()
       typingTracker.clearAll()
       socket.stop()
       outbox.stop()

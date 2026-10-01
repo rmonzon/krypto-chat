@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WebSocket as WsClient } from "ws";
-import { createUser, TestSocket, useTestServer, wsUrl } from "./helpers.js";
+import { createUser, signToken, TestSocket, useTestServer, wsUrl } from "./helpers.js";
 
 // Short timings so the tests don't wait for the real 5s auth window and 30s heartbeat.
 useTestServer({ realtime: { authTimeoutMs: 200, heartbeatMs: 100 } });
@@ -39,5 +39,41 @@ describe("websocket timeouts", () => {
 
     // One unanswered ping, then terminated at the next heartbeat (no close frame).
     expect(await closed).toBe(1006);
+  });
+});
+
+/** A token that expires in about 2 seconds (exp has whole-second precision). */
+const shortLivedToken = (userId: string) => signToken(userId, { expiresIn: "2s" });
+
+describe("websocket token expiry", () => {
+  it("closes a socket when its token expires", async () => {
+    const alice = await createUser("alice");
+    const socket = await TestSocket.connect({ token: await shortLivedToken(alice.id) });
+    expect(await socket.closed).toEqual({ code: 4401, reason: "token expired" });
+  });
+
+  it("keeps the socket open past expiry when a refreshed token arrives", async () => {
+    const alice = await createUser("alice");
+    const socket = await TestSocket.connect({ token: await shortLivedToken(alice.id) });
+
+    socket.send({ type: "auth", token: alice.token }); // valid for an hour
+    await wait(2_500);
+    socket.send({ type: "nope" });
+    expect(await socket.next("error")).toMatchObject({ reason: "unknown_event" });
+    await socket.expectNone("ready"); // a refresh isn't a new session
+    socket.close();
+  });
+
+  it("closes the socket on a refresh for another user, or an invalid one", async () => {
+    const alice = await createUser("alice");
+    const bob = await createUser("bob");
+
+    const switched = await TestSocket.connect(alice);
+    switched.send({ type: "auth", token: bob.token });
+    expect(await switched.closed).toEqual({ code: 4401, reason: "unauthorized" });
+
+    const garbage = await TestSocket.connect(alice);
+    garbage.send({ type: "auth", token: "garbage" });
+    expect(await garbage.closed).toEqual({ code: 4401, reason: "unauthorized" });
   });
 });
