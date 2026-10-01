@@ -10,6 +10,7 @@ const MESSAGES: Record<string, string> = {
   signup_only_invite: 'That code is for signing up new users, not for connecting.',
   username_taken: 'That username is taken.',
   invalid_username: 'Usernames are 3–30 lowercase letters, digits or _.',
+  rate_limited: 'Too many attempts. Wait a minute and try again.',
 }
 
 /**

@@ -7,6 +7,9 @@ describe('inviteErrorMessage', () => {
     expect(inviteErrorMessage(new ApiError(410, 'invite_used'))).toBe(
       'That invite was already used.',
     )
+    expect(inviteErrorMessage(new ApiError(429, 'rate_limited'))).toBe(
+      'Too many attempts. Wait a minute and try again.',
+    )
     expect(inviteErrorMessage(new ApiError(500, 'internal_error'))).toBeUndefined()
     expect(inviteErrorMessage(new TypeError('Failed to fetch'))).toBeUndefined()
   })
