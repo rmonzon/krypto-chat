@@ -13,11 +13,20 @@ declare module "fastify" {
 const issuer = `${config.supabaseUrl}/auth/v1`;
 const jwks = createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks.json`));
 
-/** Verifies a Supabase access token and returns the user id (`sub`). */
-export async function verifyAccessToken(token: string): Promise<string> {
+export type VerifiedToken = {
+  userId: string;
+  /** When the token expires, in ms since the epoch; undefined if it has no exp claim. */
+  expiresAt?: number;
+};
+
+/** Verifies a Supabase access token: who it's for (`sub`) and until when. */
+export async function verifyAccessToken(token: string): Promise<VerifiedToken> {
   const { payload } = await jwtVerify(token, jwks, { issuer, audience: "authenticated" });
   if (!payload.sub) throw new Error("Token has no subject");
-  return payload.sub;
+  return {
+    userId: payload.sub,
+    expiresAt: payload.exp === undefined ? undefined : payload.exp * 1000,
+  };
 }
 
 /** onRequest hook: rejects the request unless it carries a valid bearer token. */
@@ -27,7 +36,7 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
   if (!token) return reply.code(401).send({ error: "unauthorized" });
 
   try {
-    request.userId = await verifyAccessToken(token);
+    request.userId = (await verifyAccessToken(token)).userId;
   } catch (err) {
     request.log.info({ err }, "rejected access token");
     return reply.code(401).send({ error: "unauthorized" });
